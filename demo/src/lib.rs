@@ -17,6 +17,7 @@ impl TwoShape {
         *r = (*r+add) % 180.0;
     }
 }
+
 impl OnEvent for TwoShape {
     fn on_event(&mut self, _ctx: &mut Context, event: Box<dyn Event>) -> Vec<Box<dyn Event>> {
         if let Some(MouseEvent{position: Some((x, _)), ..}) = event.downcast_ref() {
@@ -46,7 +47,10 @@ ramp::run!{
         Image{shape: ShapeType::RoundedRectangle(0.0, (150.0, 28.0), 0.0, 20.0), image, color: None},
         0.0,
         Text::new(vec![
-            Span::new("Hello World".to_string(), 16.0, None, Arc::new(font), Color(0, 255, 0, 255), 0.0)
+            Span::new("Hello World I am now having fun".to_string(), 16.0, None, Arc::new(font), Color(0, 255, 0, 255), 0.0)
         ], None, Align::Center, None),
     )
 }
+
+
+

@@ -850,7 +850,7 @@ name = "demo"
 version = "0.1.0"
 dependencies = [
  "image",
- "ramp",
+ "ramp2",
 ]
 
 [[package]]
@@ -2993,7 +2993,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e8cf8e6a8aa66ce33f63993ffc4ea4271eb5b0530a9002db8455ea6050c77bfa"
 
 [[package]]
-name = "prism"
+name = "prism2"
 version = "0.1.0"
 dependencies = [
  "anyanymap",
@@ -3005,6 +3005,8 @@ dependencies = [
 [[package]]
 name = "prism_proc"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2f5d0605f41f9402761e2025ca6c49eb0460157490ccc77f400824488272f08"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3097,11 +3099,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 
 [[package]]
-name = "ramp"
+name = "ramp2"
 version = "0.1.0"
 dependencies = [
  "maverick_os",
- "prism",
+ "prism2",
  "wgpu_canvas",
 ]
 
@@ -4487,7 +4489,7 @@ dependencies = [
 
 [[package]]
 name = "wgpu_canvas"
-version = "5.0.2"
+version = "5.0.3"
 dependencies = [
  "bytemuck",
  "fontdue",
