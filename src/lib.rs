@@ -74,7 +74,7 @@ pub mod __private {
     impl<B: Builder> Application for Ramp<B> {
         async fn new(ctx: &mut Context) -> Self {
             let (sender, receiver) = channel();
-            let context = prism::Context{
+            let mut context = prism::Context{
                 state: State::default(),
                 sender,
             };
@@ -84,7 +84,7 @@ pub mod __private {
                 (ctx.window.size.1 as f64 / scale_factor) as f32,
             );
 
-            let app = B::build();
+            let app = B::build(&mut context);
             let size_request = app.request_size();
             let sized_app = app.build(screen, size_request);
             Ramp{
@@ -265,7 +265,7 @@ pub mod __private {
         }
     }
 
-    pub trait Builder {fn build() -> Box<dyn Drawable>;}
+    pub trait Builder {fn build(ctx: &mut prism::Context) -> Box<dyn Drawable>;}
 }
 
 #[macro_export]
@@ -275,8 +275,8 @@ macro_rules! run {
 
         struct PrismBuilder;
         impl Builder for PrismBuilder {
-            fn build() -> Box<dyn Drawable> {
-                Box::new({$($app)*})
+            fn build(ctx: &mut prism::Context) -> Box<dyn Drawable> {
+                Box::new(({$($app)*})(ctx))
             }
         }
 

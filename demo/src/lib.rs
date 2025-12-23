@@ -34,7 +34,7 @@ impl OnEvent for TwoShape {
     }
 }
 
-ramp::run!{
+ramp::run!{|_ctx: &mut Context| {
     let font = Font::from_bytes(include_bytes!("../font.ttf").to_vec().as_slice()).unwrap();
     let image: Arc<RgbaImage> = Arc::new(image::open("./dog.png").unwrap().into());
     TwoShape(
@@ -50,7 +50,4 @@ ramp::run!{
             Span::new("Hello World I am now having fun".to_string(), 16.0, None, Arc::new(font), Color(0, 255, 0, 255), 0.0)
         ], None, Align::Center, None),
     )
-}
-
-
-
+}}
