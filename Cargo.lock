@@ -4501,8 +4501,6 @@ dependencies = [
 [[package]]
 name = "wgpu_canvas"
 version = "5.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2492ed18427029a7e398d26835f77461abb2289f12187ee54fe38e146e03615"
 dependencies = [
  "bytemuck",
  "fontdue",

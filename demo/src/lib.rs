@@ -1,6 +1,6 @@
 use ramp::prism;
 use prism::canvas::{Shape, ShapeType, Color, Text, Align, Span, Font, Image, RgbaImage};
-use prism::drawable::Component;
+use prism::drawable::{Component, SizedTree};
 use prism::layout::Row;
 use prism::event::{OnEvent, MouseEvent, Event};
 use prism::Context;
@@ -19,7 +19,7 @@ impl TwoShape {
 }
 
 impl OnEvent for TwoShape {
-    fn on_event(&mut self, _ctx: &mut Context, event: Box<dyn Event>) -> Vec<Box<dyn Event>> {
+    fn on_event(&mut self, _ctx: &mut Context, _sized: &SizedTree, event: Box<dyn Event>) -> Vec<Box<dyn Event>> {
         if let Some(MouseEvent{position: Some((x, _)), ..}) = event.downcast_ref() {
             let n = if *x > self.7 {-1.0} else {1.0};
             self.7 = *x;

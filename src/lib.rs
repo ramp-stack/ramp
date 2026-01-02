@@ -17,6 +17,7 @@ pub mod __private {
     use std::sync::mpsc::{Receiver, channel};
     use std::collections::VecDeque;
     use std::marker::PhantomData;
+    use std::time::Instant;
 
     pub struct Ramp<B>{
         app: Box<dyn Drawable>,
@@ -31,6 +32,7 @@ pub mod __private {
         sized_app: SizedTree,
         events: VecDeque<Box<dyn prism::event::Event>>,
         scale_factor: f64,
+        timer: Instant,
         _p: PhantomData::<fn() -> B>
     }
     impl<B: Builder> Ramp<B> {
@@ -44,7 +46,7 @@ pub mod __private {
                 ShapeType::Rectangle(s, (w, h), a) =>
                     ShapeType::Rectangle(self.physical(s), (self.physical(w), self.physical(h)), a),
                 ShapeType::RoundedRectangle(s, (w, h), a, c) =>
-                    ShapeType::RoundedRectangle(self.physical(s), (self.physical(w), self.physical(h)), a, c),
+                    ShapeType::RoundedRectangle(self.physical(s), (self.physical(w), self.physical(h)), a, self.physical(c)),
             }
         }
 
@@ -53,7 +55,7 @@ pub mod __private {
                 match request {
                     prism::Request::Event(event) => self.events.push_back(event),
                     prism::Request::Hardware(hardware) => match hardware {
-                        _ => todo!()
+                        x => println!("Attempting to start {x:?}")
                       //CameraStart,
                       //CameraFrame(FrameSettings),
                       //CameraStop,
@@ -100,6 +102,7 @@ pub mod __private {
                 events: VecDeque::new() ,
                 scroll: None,
                 scale_factor,
+                timer: Instant::now(),
                 _p: PhantomData::<fn() -> B>
             }
         }
@@ -119,6 +122,8 @@ pub mod __private {
                     Lifetime::Close => None,
                     Lifetime::Draw => {
                         self.app.event(&mut self.context, &self.sized_app, Box::new(TickEvent));
+                        println!("MPF: {:?}", self.timer.elapsed().as_millis());
+                        self.timer = Instant::now();
 
                         self.handle_requests();
 
@@ -133,9 +138,8 @@ pub mod __private {
 
                         let size_request = self.app.request_size();
                         self.sized_app = self.app.build(self.screen, size_request);
-
                         let drawn = self.app.draw(&self.sized_app, (0.0, 0.0), (0.0, 0.0, self.screen.0, self.screen.1));
-                        let scaled: Vec<_> = drawn.into_iter().map(|(a, i)|
+                        let scaled: Vec<_> = drawn.into_iter().map(|(a, i)| {
                             (Area{
                                 offset: (self.physical(a.offset.0), self.physical(a.offset.1)),
                                 bounds: a.bounds.map(|b| (self.physical(b.0), self.physical(b.1), self.physical(b.2), self.physical(b.3)))
@@ -159,7 +163,7 @@ pub mod __private {
                                     text
                                 })
                             })
-                        ).collect();
+                        }).collect();
                         self.canvas.draw(&mut self.atlas, scaled);
                         None
                     },
