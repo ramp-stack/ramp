@@ -121,10 +121,9 @@ pub mod __private {
                     Lifetime::Paused => None,
                     Lifetime::Close => None,
                     Lifetime::Draw => {
-                        self.app.event(&mut self.context, &self.sized_app, Box::new(TickEvent));
-                        println!("MPF: {:?}", self.timer.elapsed().as_millis());
+                        println!("MPD {:?}", self.timer.elapsed().as_millis());
                         self.timer = Instant::now();
-
+                        self.app.event(&mut self.context, &self.sized_app, Box::new(TickEvent));
                         self.handle_requests();
 
                         while let Some(event) = self.events.pop_front() {

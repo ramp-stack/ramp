@@ -9,7 +9,8 @@ documentation = "https://docs.rs/ramp"
 
 
 [dependencies]
-maverick_os = "0.2.5"
+#maverick_os = "0.2.5"
+maverick_os = {path = "../maverick_os"}
 #prism = {version = "0.1.1", package = 'prism2'}
 #wgpu_canvas = "5.0.4"
 prism = {path = "../prism", package = "prism2"}
