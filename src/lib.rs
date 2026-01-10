@@ -121,8 +121,9 @@ pub mod __private {
                     Lifetime::Paused => None,
                     Lifetime::Close => None,
                     Lifetime::Draw => {
-                        println!("MPD {:?}", self.timer.elapsed().as_millis());
-                        self.timer = Instant::now();
+                        // println!("NPD {:?}", self.timer.elapsed().as_nanos());
+                        // self.timer = Instant::now();
+
                         self.app.event(&mut self.context, &self.sized_app, Box::new(TickEvent));
                         self.handle_requests();
 
@@ -132,6 +133,8 @@ pub mod __private {
                                 .remove(0)
                             {
                                 self.app.event(&mut self.context, &self.sized_app, event);
+                                // let size_request = self.app.request_size();
+                                // self.sized_app = self.app.build(self.screen, size_request);
                             }
                         }
 
@@ -228,9 +231,10 @@ pub mod __private {
                                     let scroll_x = prev_x + (-pos.0 * 0.2);
                                     let scroll_y = prev_y + (-pos.1 * 0.2);
 
-                                    Box::new(MouseEvent{
-                                        position: Some(self.mouse), state: MouseState::Scroll(scroll_x, scroll_y)
-                                    }) as Box<dyn prism::event::Event>
+                                    let sf = ctx.window.scale_factor as f32;
+                                    let state = MouseState::Scroll(scroll_x * sf, scroll_y * sf);
+
+                                    Box::new(MouseEvent{ position: Some(self.mouse), state }) as Box<dyn prism::event::Event>
                                 })
                             },
                             // TouchPhase::Ended => None,

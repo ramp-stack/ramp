@@ -50,4 +50,5 @@ ramp::run!{|_ctx: &mut Context| {
             Span::new("Hello World I am now having fun".to_string(), 16.0, None, Arc::new(font), Color(0, 255, 0, 255), 0.0)
         ], None, Align::Center, None),
     )
+
 }}
