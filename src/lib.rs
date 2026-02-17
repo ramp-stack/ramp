@@ -3,10 +3,11 @@ pub use prism;
 #[doc(hidden)]
 pub mod __private {
     pub use maverick_os;
+    pub use maverick_os::Assets;
     pub use prism::drawable::Drawable;
 
     use wgpu_canvas::{Canvas, Atlas, Area, Shape, ShapeType, Item, Image};
-    use prism::{Request, State};
+    use prism::Instance;
     use prism::event::{KeyboardState, MouseState, MouseEvent, KeyboardEvent, TickEvent};
     use prism::drawable::SizedTree;
     use maverick_os::{Application, Context, Services};
@@ -14,8 +15,6 @@ pub mod __private {
         Event, Lifetime, Input, TouchPhase, Touch, MouseScrollDelta, ElementState, Key, NamedKey
     };
 
-    use std::sync::mpsc::{Receiver, channel};
-    use std::collections::VecDeque;
     use std::marker::PhantomData;
     use std::time::Instant;
 
@@ -24,13 +23,12 @@ pub mod __private {
         atlas: Atlas,
         canvas: Canvas,
         context: prism::Context,
-        receiver: Receiver<Request>,
+        instance: Instance,
         touching: bool,
         mouse: (f32, f32),
         scroll: Option<(f32, f32)>,
         screen: (f32, f32),
         sized_app: SizedTree,
-        events: VecDeque<Box<dyn prism::event::Event>>,
         scale_factor: f64,
         timer: Instant,
         _p: PhantomData::<fn() -> B>
@@ -49,44 +47,18 @@ pub mod __private {
                     ShapeType::RoundedRectangle(self.physical(s), (self.physical(w), self.physical(h)), a, self.physical(c)),
             }
         }
-
-        fn handle_requests(&mut self) {
-            while let Ok(request) = self.receiver.try_recv() {
-                match request {
-                    prism::Request::Event(event) => self.events.push_back(event),
-                    prism::Request::Hardware(hardware) => match hardware {
-                        x => println!("Attempting to start {x:?}")
-                      //CameraStart,
-                      //CameraFrame(FrameSettings),
-                      //CameraStop,
-                      //PhotoPicker,
-                      //SetClipboard(String),
-                      //GetClipboard,
-                      //SetCloud(String, String),
-                      //GetCloud(String),
-                      //Share(String),
-                      //Haptic,
-                    },
-                    prism::Request::Service(_, _) => {todo!()}
-                }
-            }
-        }
     }
     impl<B: Builder> Services for Ramp<B> {}
     impl<B: Builder> Application for Ramp<B> {
-        async fn new(ctx: &mut Context) -> Self {
-            let (sender, receiver) = channel();
-            let mut context = prism::Context{
-                state: State::default(),
-                sender,
-            };
+        async fn new(ctx: &mut Context, assets: Assets) -> Self {
+            let (mut context, receiver) = prism::Context::new();
             let scale_factor = ctx.window.scale_factor;
             let screen = (
                 (ctx.window.size.0 as f64 / scale_factor) as f32,
                 (ctx.window.size.1 as f64 / scale_factor) as f32,
             );
 
-            let app = B::build(&mut context);
+            let app = B::build(&mut context, assets);
             let size_request = app.request_size();
             let sized_app = app.build(screen, size_request);
             Ramp{
@@ -94,12 +66,11 @@ pub mod __private {
                 atlas: Atlas::default(),
                 canvas: Canvas::new(ctx.window.handle.clone(), ctx.window.size.0, ctx.window.size.1).await,
                 context,
-                receiver,
+                instance: Instance::new(receiver),
                 touching: false,
                 mouse: (0.0, 0.0),
                 screen,
                 sized_app,
-                events: VecDeque::new() ,
                 scroll: None,
                 scale_factor,
                 timer: Instant::now(),
@@ -121,13 +92,12 @@ pub mod __private {
                     Lifetime::Paused => None,
                     Lifetime::Close => None,
                     Lifetime::Draw => {
-                        // println!("NPD {:?}", self.timer.elapsed().as_nanos());
-                        // self.timer = Instant::now();
-
+                        self.instance.tick(&mut self.context);
                         self.app.event(&mut self.context, &self.sized_app, Box::new(TickEvent));
-                        self.handle_requests();
+                        // println!("NPD {:?}", self.timer.elapsed().as_millis());
+                        self.instance.handle_requests();
 
-                        while let Some(event) = self.events.pop_front() {
+                        while let Some(event) = self.instance.events.pop_front() {
                             if let Some(event) = event
                                 .pass(&mut self.context, &[prism::layout::Area{offset: (0.0, 0.0), size: self.sized_app.0}])
                                 .remove(0)
@@ -268,22 +238,21 @@ pub mod __private {
                     },
                     _ => None
                 }
-            } {self.events.push_back(event);}
+            } {self.instance.events.push_back(event);}
         }
     }
 
-    pub trait Builder {fn build(ctx: &mut prism::Context) -> Box<dyn Drawable>;}
+    pub trait Builder {fn build(ctx: &mut prism::Context, assets: Assets) -> Box<dyn Drawable>;}
 }
 
 #[macro_export]
 macro_rules! run {
     ($($app:tt)*) => {
         pub use $crate::__private::*;
-
         struct PrismBuilder;
         impl Builder for PrismBuilder {
-            fn build(ctx: &mut prism::Context) -> Box<dyn Drawable> {
-                Box::new(({$($app)*})(ctx))
+            fn build(ctx: &mut prism::Context, assets: Assets) -> Box<dyn Drawable> {
+                Box::new(({$($app)*})(ctx, assets))
             }
         }
 
