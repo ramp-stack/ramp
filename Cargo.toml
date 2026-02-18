@@ -1,6 +1,6 @@
 [package]
 name = "ramp2"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 license = "BSD-3-Clause"
 repository = "https://github.com/ramp-stack/ramp.git"
@@ -9,9 +9,6 @@ documentation = "https://docs.rs/ramp"
 
 
 [dependencies]
-#maverick_os = "0.2.5"
-maverick_os = {path = "../maverick_os"}
-#prism = {version = "0.1.1", package = 'prism2'}
-#wgpu_canvas = "5.0.4"
-prism = {path = "../prism", package = "prism2"}
-wgpu_canvas = {path = "../wgpu_canvas"}
+maverick_os = "0.3.2"
+prism = {version = "0.1.2", package = "prism2"}
+wgpu_canvas = "5.0.5"
