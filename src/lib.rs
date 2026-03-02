@@ -94,7 +94,8 @@ pub mod __private {
                     Lifetime::Draw => {
                         self.instance.tick(&mut self.context);
                         self.app.event(&mut self.context, &self.sized_app, Box::new(TickEvent));
-                        // println!("NPD {:?}", self.timer.elapsed().as_millis());
+                        println!("MPD {:?}", self.timer.elapsed().as_millis());
+                        self.timer = Instant::now();
                         self.instance.handle_requests();
 
                         while let Some(event) = self.instance.events.pop_front() {

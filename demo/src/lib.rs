@@ -7,7 +7,7 @@ use prism::Context;
 
 use std::sync::Arc;
 
-#[derive(Debug, Component)]
+#[derive(Debug, Component, Clone)]
 pub struct TwoShape(Row, Shape, Image, Shape, Shape, #[skip] f32, Text);
 impl TwoShape {
     fn rotate_shape(shape: &mut ShapeType, add: f32) {
