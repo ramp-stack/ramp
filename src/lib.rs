@@ -3,8 +3,8 @@ pub use prism;
 #[doc(hidden)]
 pub mod __private {
     pub use maverick_os;
-    pub use maverick_os::Assets;
     pub use prism::drawable::Drawable;
+    pub use maverick_os::Assets;
 
     use wgpu_canvas::{Canvas, Atlas, Area, Shape, ShapeType, Item, Image};
     use prism::Instance;
