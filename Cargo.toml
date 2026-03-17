@@ -9,7 +9,7 @@ documentation = "https://docs.rs/ramp"
 
 
 [dependencies]
-maverick_os = "0.3.3"
+maverick_os = "0.3.4"
 #maverick_os = {package = 'maverick_os', path = "../maverick_os"}
 prism = {version = "0.1.4", package = "prism2"}
 #prism = {package = 'prism2', path = "../prism"}
