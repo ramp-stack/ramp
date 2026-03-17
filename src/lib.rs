@@ -4,9 +4,10 @@ pub use prism;
 pub mod __private {
     pub use maverick_os;
     pub use prism::drawable::Drawable;
+    pub use maverick_os::Assets;
 
     use wgpu_canvas::{Canvas, Atlas, Area, Shape, ShapeType, Item, Image};
-    use prism::{Request, State};
+    use prism::Instance;
     use prism::event::{KeyboardState, MouseState, MouseEvent, KeyboardEvent, TickEvent};
     use prism::drawable::SizedTree;
     use maverick_os::{Application, Context, Services};
@@ -14,23 +15,22 @@ pub mod __private {
         Event, Lifetime, Input, TouchPhase, Touch, MouseScrollDelta, ElementState, Key, NamedKey
     };
 
-    use std::sync::mpsc::{Receiver, channel};
-    use std::collections::VecDeque;
     use std::marker::PhantomData;
+    use std::time::Instant;
 
     pub struct Ramp<B>{
         app: Box<dyn Drawable>,
         atlas: Atlas,
         canvas: Canvas,
         context: prism::Context,
-        receiver: Receiver<Request>,
+        instance: Instance,
         touching: bool,
         mouse: (f32, f32),
         scroll: Option<(f32, f32)>,
         screen: (f32, f32),
         sized_app: SizedTree,
-        events: VecDeque<Box<dyn prism::event::Event>>,
         scale_factor: f64,
+        timer: Instant,
         _p: PhantomData::<fn() -> B>
     }
     impl<B: Builder> Ramp<B> {
@@ -44,47 +44,21 @@ pub mod __private {
                 ShapeType::Rectangle(s, (w, h), a) =>
                     ShapeType::Rectangle(self.physical(s), (self.physical(w), self.physical(h)), a),
                 ShapeType::RoundedRectangle(s, (w, h), a, c) =>
-                    ShapeType::RoundedRectangle(self.physical(s), (self.physical(w), self.physical(h)), a, c),
-            }
-        }
-
-        fn handle_requests(&mut self) {
-            while let Ok(request) = self.receiver.try_recv() {
-                match request {
-                    prism::Request::Event(event) => self.events.push_back(event),
-                    prism::Request::Hardware(hardware) => match hardware {
-                        _ => todo!()
-                      //CameraStart,
-                      //CameraFrame(FrameSettings),
-                      //CameraStop,
-                      //PhotoPicker,
-                      //SetClipboard(String),
-                      //GetClipboard,
-                      //SetCloud(String, String),
-                      //GetCloud(String),
-                      //Share(String),
-                      //Haptic,
-                    },
-                    prism::Request::Service(_, _) => {todo!()}
-                }
+                    ShapeType::RoundedRectangle(self.physical(s), (self.physical(w), self.physical(h)), a, self.physical(c)),
             }
         }
     }
     impl<B: Builder> Services for Ramp<B> {}
     impl<B: Builder> Application for Ramp<B> {
-        async fn new(ctx: &mut Context) -> Self {
-            let (sender, receiver) = channel();
-            let context = prism::Context{
-                state: State::default(),
-                sender,
-            };
+        async fn new(ctx: &mut Context, assets: Assets) -> Self {
+            let (mut context, receiver) = prism::Context::new();
             let scale_factor = ctx.window.scale_factor;
             let screen = (
                 (ctx.window.size.0 as f64 / scale_factor) as f32,
                 (ctx.window.size.1 as f64 / scale_factor) as f32,
             );
 
-            let app = B::build();
+            let app = B::build(&mut context, assets);
             let size_request = app.request_size();
             let sized_app = app.build(screen, size_request);
             Ramp{
@@ -92,14 +66,14 @@ pub mod __private {
                 atlas: Atlas::default(),
                 canvas: Canvas::new(ctx.window.handle.clone(), ctx.window.size.0, ctx.window.size.1).await,
                 context,
-                receiver,
+                instance: Instance::new(receiver),
                 touching: false,
                 mouse: (0.0, 0.0),
                 screen,
                 sized_app,
-                events: VecDeque::new() ,
                 scroll: None,
                 scale_factor,
+                timer: Instant::now(),
                 _p: PhantomData::<fn() -> B>
             }
         }
@@ -118,24 +92,27 @@ pub mod __private {
                     Lifetime::Paused => None,
                     Lifetime::Close => None,
                     Lifetime::Draw => {
+                        self.instance.tick(&mut self.context);
                         self.app.event(&mut self.context, &self.sized_app, Box::new(TickEvent));
+                        println!("MPD {:?}", self.timer.elapsed().as_millis());
+                        self.timer = Instant::now();
+                        self.instance.handle_requests();
 
-                        self.handle_requests();
-
-                        while let Some(event) = self.events.pop_front() {
+                        while let Some(event) = self.instance.events.pop_front() {
                             if let Some(event) = event
                                 .pass(&mut self.context, &[prism::layout::Area{offset: (0.0, 0.0), size: self.sized_app.0}])
                                 .remove(0)
                             {
                                 self.app.event(&mut self.context, &self.sized_app, event);
+                                // let size_request = self.app.request_size();
+                                // self.sized_app = self.app.build(self.screen, size_request);
                             }
                         }
 
                         let size_request = self.app.request_size();
                         self.sized_app = self.app.build(self.screen, size_request);
-
                         let drawn = self.app.draw(&self.sized_app, (0.0, 0.0), (0.0, 0.0, self.screen.0, self.screen.1));
-                        let scaled: Vec<_> = drawn.into_iter().map(|(a, i)|
+                        let scaled: Vec<_> = drawn.into_iter().map(|(a, i)| {
                             (Area{
                                 offset: (self.physical(a.offset.0), self.physical(a.offset.1)),
                                 bounds: a.bounds.map(|b| (self.physical(b.0), self.physical(b.1), self.physical(b.2), self.physical(b.3)))
@@ -159,7 +136,7 @@ pub mod __private {
                                     text
                                 })
                             })
-                        ).collect();
+                        }).collect();
                         self.canvas.draw(&mut self.atlas, scaled);
                         None
                     },
@@ -225,9 +202,10 @@ pub mod __private {
                                     let scroll_x = prev_x + (-pos.0 * 0.2);
                                     let scroll_y = prev_y + (-pos.1 * 0.2);
 
-                                    Box::new(MouseEvent{
-                                        position: Some(self.mouse), state: MouseState::Scroll(scroll_x, scroll_y)
-                                    }) as Box<dyn prism::event::Event>
+                                    let sf = ctx.window.scale_factor as f32;
+                                    let state = MouseState::Scroll(scroll_x * sf, scroll_y * sf);
+
+                                    Box::new(MouseEvent{ position: Some(self.mouse), state }) as Box<dyn prism::event::Event>
                                 })
                             },
                             // TouchPhase::Ended => None,
@@ -261,22 +239,21 @@ pub mod __private {
                     },
                     _ => None
                 }
-            } {self.events.push_back(event);}
+            } {self.instance.events.push_back(event);}
         }
     }
 
-    pub trait Builder {fn build() -> Box<dyn Drawable>;}
+    pub trait Builder {fn build(ctx: &mut prism::Context, assets: Assets) -> Box<dyn Drawable>;}
 }
 
 #[macro_export]
 macro_rules! run {
     ($($app:tt)*) => {
         pub use $crate::__private::*;
-
         struct PrismBuilder;
         impl Builder for PrismBuilder {
-            fn build() -> Box<dyn Drawable> {
-                Box::new({$($app)*})
+            fn build(ctx: &mut prism::Context, assets: Assets) -> Box<dyn Drawable> {
+                Box::new(({$($app)*})(ctx, assets))
             }
         }
 
