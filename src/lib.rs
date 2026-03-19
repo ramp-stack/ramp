@@ -7,7 +7,7 @@ pub mod __private {
     pub use maverick_os::Assets;
 
     use wgpu_canvas::{Canvas, Atlas, Area, Shape, ShapeType, Item, Image};
-    use prism::Instance;
+    use prism::{Instance};
     use prism::event::{KeyboardState, MouseState, MouseEvent, KeyboardEvent, TickEvent};
     use prism::drawable::SizedTree;
     use maverick_os::{Application, Context, Services};
@@ -94,9 +94,28 @@ pub mod __private {
                     Lifetime::Draw => {
                         self.instance.tick(&mut self.context);
                         self.app.event(&mut self.context, &self.sized_app, Box::new(TickEvent));
-                        println!("MPD {:?}", self.timer.elapsed().as_millis());
+                        // println!("MPD {:?}", self.timer.elapsed().as_millis());
                         self.timer = Instant::now();
-                        self.instance.handle_requests();
+                        // if let Some(hardware) = self.instance.handle_requests() {
+                        //     match hardware {
+                        //         // Hardware::CameraStart,
+                        //         // Hardware::CameraFrame(FrameSettings),
+                        //         // Hardware::CameraStop,
+                        //         // Hardware::PhotoPicker,
+                        //         Hardware::SetClipboard(data) => ctx.hardware.clipboard().set(data),
+                        //         Hardware::GetClipboard => {
+                        //             ctx.hardware.clipboard().get().map(|data| {
+                        //                 println!("DATA {:?}", data);
+                        //                 self.context.send(Request::event(prism::event::HardwareEvent::Clipboard(data)));
+                        //             });
+                        //         }
+                        //         // Hardware::SetCloud(String, String),
+                        //         // Hardware::GetCloud(String),
+                        //         // Hardware::Share(String),
+                        //         // Hardware::Haptic => ,
+                        //         _ => {}
+                        //     }
+                        // }
 
                         while let Some(event) = self.instance.events.pop_front() {
                             if let Some(event) = event
