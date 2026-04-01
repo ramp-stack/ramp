@@ -7,7 +7,7 @@ pub mod __private {
     pub use maverick_os::Assets;
 
     use wgpu_canvas::{Canvas, Atlas, Area, Shape, ShapeType, Item, Image};
-    use prism::Instance;
+    use prism::{Instance, Hardware, Request};
     use prism::event::{KeyboardState, MouseState, MouseEvent, KeyboardEvent, TickEvent};
     use prism::drawable::SizedTree;
     use maverick_os::{Application, Context, Services};
@@ -94,9 +94,35 @@ pub mod __private {
                     Lifetime::Draw => {
                         self.instance.tick(&mut self.context);
                         self.app.event(&mut self.context, &self.sized_app, Box::new(TickEvent));
-                        println!("MPD {:?}", self.timer.elapsed().as_millis());
+                        // println!("MPD {:?}", self.timer.elapsed().as_millis());
                         self.timer = Instant::now();
-                        self.instance.handle_requests();
+                        if let Some(hardware) = self.instance.handle_requests() {
+                            match hardware {
+                                Hardware::GetCamera => {
+                                    if let Some(camera) = ctx.hardware.camera() && let Ok(frame) = camera.frame() {
+                                        self.context.send(Request::event(prism::event::HardwareEvent::Camera(frame.into())));
+                                    }
+                                }
+                                // Hardware::CameraFrame(FrameSettings),
+                                Hardware::StopCamera => if let Some(camera) = ctx.hardware.camera_existing() { camera.stop(); },
+                                // Hardware::PhotoPicker,
+                                Hardware::SetClipboard(data) => ctx.hardware.clipboard().set(data),
+                                Hardware::GetClipboard => {
+                                    if let Some(data) = ctx.hardware.clipboard().get() {
+                                        self.context.send(Request::event(prism::event::HardwareEvent::Clipboard(data)));
+                                    }
+                                },
+                                Hardware::GetSafeArea => {
+                                    let area = ctx.hardware.safe_area_insets();
+                                    self.context.send(Request::event(prism::event::HardwareEvent::SafeArea(area.0, area.1, area.2, area.3)));
+                                },
+                                // Hardware::SetCloud(String, String),
+                                // Hardware::GetCloud(String),
+                                Hardware::Share(data) => ctx.hardware.share(&data),
+                                Hardware::Haptic => ctx.hardware.haptic(),
+                                _ => {}
+                            }
+                        }
 
                         while let Some(event) = self.instance.events.pop_front() {
                             if let Some(event) = event
