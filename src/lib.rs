@@ -98,21 +98,28 @@ pub mod __private {
                         self.timer = Instant::now();
                         if let Some(hardware) = self.instance.handle_requests() {
                             match hardware {
-                                // Hardware::CameraStart,
+                                Hardware::GetCamera => {
+                                    if let Some(camera) = ctx.hardware.camera() && let Ok(frame) = camera.frame() {
+                                        self.context.send(Request::event(prism::event::HardwareEvent::Camera(frame.into())));
+                                    }
+                                }
                                 // Hardware::CameraFrame(FrameSettings),
-                                // Hardware::CameraStop,
+                                Hardware::StopCamera => if let Some(camera) = ctx.hardware.camera_existing() { camera.stop(); },
                                 // Hardware::PhotoPicker,
                                 Hardware::SetClipboard(data) => ctx.hardware.clipboard().set(data),
                                 Hardware::GetClipboard => {
-                                    ctx.hardware.clipboard().get().map(|data| {
-                                        println!("DATA {:?}", data);
+                                    if let Some(data) = ctx.hardware.clipboard().get() {
                                         self.context.send(Request::event(prism::event::HardwareEvent::Clipboard(data)));
-                                    });
-                                }
+                                    }
+                                },
+                                Hardware::GetSafeArea => {
+                                    let area = ctx.hardware.safe_area_insets();
+                                    self.context.send(Request::event(prism::event::HardwareEvent::SafeArea(area.0, area.1, area.2, area.3)));
+                                },
                                 // Hardware::SetCloud(String, String),
                                 // Hardware::GetCloud(String),
-                                // Hardware::Share(String),
-                                // Hardware::Haptic => ,
+                                Hardware::Share(data) => ctx.hardware.share(&data),
+                                Hardware::Haptic => ctx.hardware.haptic(),
                                 _ => {}
                             }
                         }
