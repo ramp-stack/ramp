@@ -8,11 +8,11 @@ pub mod __private {
 
     use wgpu_canvas::{Canvas, Atlas, Area, Shape, ShapeType, Item, Image};
     use prism::{Instance, Hardware, Request};
-    use prism::event::{KeyboardState, MouseState, MouseEvent, KeyboardEvent, TickEvent};
+    use prism::event::{KeyboardState, MouseState, MouseEvent, KeyboardEvent, Modifiers, TickEvent};
     use prism::drawable::SizedTree;
     use maverick_os::{Application, Context, Services};
     use maverick_os::window::{
-        Event, Lifetime, Input, TouchPhase, Touch, MouseScrollDelta, ElementState, Key, NamedKey
+        Event, Lifetime, Input, TouchPhase, Touch, MouseScrollDelta, ElementState, Key, NamedKey, Modifiers as WinitModifiers
     };
 
     use std::marker::PhantomData;
@@ -31,6 +31,7 @@ pub mod __private {
         sized_app: SizedTree,
         scale_factor: f64,
         timer: Instant,
+        modifiers: WinitModifiers,
         _p: PhantomData::<fn() -> B>
     }
     impl<B: Builder> Ramp<B> {
@@ -74,6 +75,7 @@ pub mod __private {
                 scroll: None,
                 scale_factor,
                 timer: Instant::now(),
+                modifiers: WinitModifiers::default(),
                 _p: PhantomData::<fn() -> B>
             }
         }
@@ -94,7 +96,6 @@ pub mod __private {
                     Lifetime::Draw => {
                         self.instance.tick(&mut self.context);
                         self.app.event(&mut self.context, &self.sized_app, Box::new(TickEvent));
-                        // println!("MPD {:?}", self.timer.elapsed().as_millis());
                         self.timer = Instant::now();
                         if let Some(hardware) = self.instance.handle_requests() {
                             match hardware {
@@ -103,9 +104,7 @@ pub mod __private {
                                         self.context.send(Request::event(prism::event::HardwareEvent::Camera(frame.into())));
                                     }
                                 }
-                                // Hardware::CameraFrame(FrameSettings),
                                 Hardware::StopCamera => if let Some(camera) = ctx.hardware.camera_existing() { camera.stop(); },
-                                // Hardware::PhotoPicker,
                                 Hardware::SetClipboard(data) => ctx.hardware.clipboard().set(data),
                                 Hardware::GetClipboard => {
                                     if let Some(data) = ctx.hardware.clipboard().get() {
@@ -116,8 +115,6 @@ pub mod __private {
                                     let area = ctx.hardware.safe_area_insets();
                                     self.context.send(Request::event(prism::event::HardwareEvent::SafeArea(area.0, area.1, area.2, area.3)));
                                 },
-                                // Hardware::SetCloud(String, String),
-                                // Hardware::GetCloud(String),
                                 Hardware::Share(data) => ctx.hardware.share(&data),
                                 Hardware::Haptic => ctx.hardware.haptic(),
                                 _ => {}
@@ -130,8 +127,6 @@ pub mod __private {
                                 .remove(0)
                             {
                                 self.app.event(&mut self.context, &self.sized_app, event);
-                                // let size_request = self.app.request_size();
-                                // self.sized_app = self.app.build(self.screen, size_request);
                             }
                         }
 
@@ -169,6 +164,10 @@ pub mod __private {
                     Lifetime::MemoryWarning => None,
                 },
                 Event::Input(input) => match input {
+                    Input::ModifiersChanged(new_modifiers) => {
+                        self.modifiers = new_modifiers;
+                        None
+                    },
                     Input::Touch(Touch { location, phase, .. }) => {
                         let location = (location.x as f32, location.y as f32);
                         let position = (self.logical(location.0), self.logical(location.1));
@@ -189,7 +188,6 @@ pub mod __private {
                                     let dy = position.1 - prev_y;
                                     let scroll_x = -dx * 1.0;
                                     let scroll_y = -dy * 1.0;
-                            
                                     (scroll_x.abs() > 0.01 || scroll_y.abs() > 0.01).then_some(
                                         MouseState::Scroll(scroll_x, scroll_y)
                                     )
@@ -198,7 +196,7 @@ pub mod __private {
                         }.map(|state| Box::new(MouseEvent{position: Some(position), state}) as Box<dyn prism::event::Event>);
                         self.mouse = position;
                         event
-                    },                
+                    },
                     Input::CursorMoved{position, ..} => {
                         let position = (self.logical(position.0 as f32), self.logical(position.1 as f32));
                         (self.mouse != position).then_some({
@@ -224,43 +222,84 @@ pub mod __private {
                                         MouseScrollDelta::LineDelta(x, y) => (x.signum(), y.signum()),
                                         MouseScrollDelta::PixelDelta(p) => (p.x as f32, p.y as f32),
                                     };
-
                                     let scroll_x = prev_x + (-pos.0 * 0.2);
                                     let scroll_y = prev_y + (-pos.1 * 0.2);
-
                                     let sf = ctx.window.scale_factor as f32;
                                     let state = MouseState::Scroll(scroll_x * sf, scroll_y * sf);
-
                                     Box::new(MouseEvent{ position: Some(self.mouse), state }) as Box<dyn prism::event::Event>
                                 })
                             },
-                            // TouchPhase::Ended => None,
                             _ => None
                         }
                     },
                     Input::Keyboard{event, ..} => {
+                        let mods = self.modifiers.state();
+                        let modifiers = Modifiers {
+                            shift: mods.shift_key(),
+                            ctrl:  mods.control_key(),
+                            alt:   mods.alt_key(),
+                            meta:  mods.super_key(),
+                        };
                         Some(event).and_then(|event| Some(Box::new(KeyboardEvent{
                             key: match event.logical_key {
                                 Key::Named(named) => Some(prism::event::Key::Named(match named {
                                     NamedKey::Enter => Some(prism::event::NamedKey::Enter),
                                     NamedKey::Tab => Some(prism::event::NamedKey::Tab),
                                     NamedKey::Space => Some(prism::event::NamedKey::Space),
+                                    NamedKey::Backspace | NamedKey::Delete => Some(prism::event::NamedKey::Delete),
+                                    NamedKey::Escape => Some(prism::event::NamedKey::Escape),
                                     NamedKey::ArrowDown => Some(prism::event::NamedKey::ArrowDown),
                                     NamedKey::ArrowLeft => Some(prism::event::NamedKey::ArrowLeft),
                                     NamedKey::ArrowRight => Some(prism::event::NamedKey::ArrowRight),
                                     NamedKey::ArrowUp => Some(prism::event::NamedKey::ArrowUp),
-                                    NamedKey::Delete | NamedKey::Backspace => Some(prism::event::NamedKey::Delete),
+                                    NamedKey::Insert => Some(prism::event::NamedKey::Insert),
+                                    NamedKey::Home => Some(prism::event::NamedKey::Home),
+                                    NamedKey::End => Some(prism::event::NamedKey::End),
+                                    NamedKey::PageUp => Some(prism::event::NamedKey::PageUp),
+                                    NamedKey::PageDown => Some(prism::event::NamedKey::PageDown),
+                                    NamedKey::Shift => Some(prism::event::NamedKey::Shift),
+                                    NamedKey::Control => Some(prism::event::NamedKey::Control),
+                                    NamedKey::Alt => Some(prism::event::NamedKey::Alt),
+                                    NamedKey::Meta => Some(prism::event::NamedKey::Meta),
+                                    NamedKey::CapsLock => Some(prism::event::NamedKey::CapsLock),
+                                    NamedKey::NumLock => Some(prism::event::NamedKey::NumLock),
+                                    NamedKey::ScrollLock => Some(prism::event::NamedKey::ScrollLock),
+                                    NamedKey::F1 => Some(prism::event::NamedKey::F1),
+                                    NamedKey::F2 => Some(prism::event::NamedKey::F2),
+                                    NamedKey::F3 => Some(prism::event::NamedKey::F3),
+                                    NamedKey::F4 => Some(prism::event::NamedKey::F4),
+                                    NamedKey::F5 => Some(prism::event::NamedKey::F5),
+                                    NamedKey::F6 => Some(prism::event::NamedKey::F6),
+                                    NamedKey::F7 => Some(prism::event::NamedKey::F7),
+                                    NamedKey::F8 => Some(prism::event::NamedKey::F8),
+                                    NamedKey::F9 => Some(prism::event::NamedKey::F9),
+                                    NamedKey::F10 => Some(prism::event::NamedKey::F10),
+                                    NamedKey::F11 => Some(prism::event::NamedKey::F11),
+                                    NamedKey::F12 => Some(prism::event::NamedKey::F12),
+                                    NamedKey::MediaPlay => Some(prism::event::NamedKey::MediaPlay),
+                                    NamedKey::MediaPause => Some(prism::event::NamedKey::MediaPause),
+                                    NamedKey::MediaPlayPause => Some(prism::event::NamedKey::MediaPlayPause),
+                                    NamedKey::MediaStop => Some(prism::event::NamedKey::MediaStop),
+                                    NamedKey::MediaTrackNext => Some(prism::event::NamedKey::MediaNextTrack),
+                                    NamedKey::MediaTrackPrevious => Some(prism::event::NamedKey::MediaPrevTrack),
+                                    NamedKey::AudioVolumeUp => Some(prism::event::NamedKey::VolumeUp),
+                                    NamedKey::AudioVolumeDown => Some(prism::event::NamedKey::VolumeDown),
+                                    NamedKey::AudioVolumeMute => Some(prism::event::NamedKey::VolumeMute),
+                                    NamedKey::PrintScreen => Some(prism::event::NamedKey::PrintScreen),
+                                    NamedKey::Pause => Some(prism::event::NamedKey::Pause),
+                                    NamedKey::ContextMenu => Some(prism::event::NamedKey::ContextMenu),
                                     _ => None
                                 }?)),
                                 Key::Character(c) => Some(prism::event::Key::Character(c.to_string())),
                                 Key::Unidentified(_) => None,
                                 Key::Dead(_) => None,
-                            }?, 
+                            }?,
                             state: match event.state {
                                 ElementState::Pressed if event.repeat => KeyboardState::Repeated,
                                 ElementState::Pressed => KeyboardState::Pressed,
                                 ElementState::Released => KeyboardState::Released,
-                            }
+                            },
+                            modifiers,
                         }) as Box<dyn prism::event::Event>))
                     },
                     _ => None
