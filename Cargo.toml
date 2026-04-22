@@ -7,7 +7,6 @@ repository = "https://github.com/ramp-stack/ramp.git"
 description = "RAMP is the glue for Maverick OS, Air Servers, And Prisms UI abstraction"
 documentation = "https://docs.rs/ramp"
 
-
 [dependencies]
 #maverick_os = "0.3.6"
 maverick_os = {package = 'maverick_os', path = "../maverick_os"}
