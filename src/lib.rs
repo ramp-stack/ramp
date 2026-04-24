@@ -50,10 +50,10 @@ pub mod __private {
         }
 
         fn get_safe_area(&mut self) -> (f32, f32, f32, f32) {self.0.safe_area_insets()}
-        fn share_social(&mut self, data: String) {self.0.share().share(&data)}
+        fn share_social(&mut self, data: String) {self.0.share(&data)}
         fn set_clipboard(&mut self, data: String) {self.0.clipboard().set(data)}
-        fn get_clipboard(&mut self) -> String {self.0.clipboard().get()}
-        fn trigger_haptic(&mut self) {self.0.haptic().vibrate()}
+        fn get_clipboard(&mut self) -> Option<String> {self.0.clipboard().get()}
+        fn trigger_haptic(&mut self) {self.0.haptic()}
     }
 
     use std::future::Future;
