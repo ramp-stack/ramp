@@ -4,26 +4,97 @@ pub use prism;
 pub mod __private {
     pub use maverick_os;
     pub use prism::drawable::Drawable;
-    pub use maverick_os::Assets;
+    pub use maverick_os::Dir;
 
     use wgpu_canvas::{Canvas, Atlas, Area, Shape, ShapeType, Item, Image};
-    use prism::{Instance, Hardware, Request};
+    use prism::{Handler, Assets};
     use prism::event::{KeyboardState, MouseState, MouseEvent, KeyboardEvent, TickEvent};
     use prism::drawable::SizedTree;
-    use maverick_os::{Application, Context, Services};
+    use maverick_os::{hardware, air, Application, Context};
+    use air::{Name, Id, Request, Substance, RequestBuilder};
     use maverick_os::window::{
         Event, Lifetime, Input, TouchPhase, Touch, MouseScrollDelta, ElementState, Key, NamedKey
     };
 
+    use std::path::PathBuf;
     use std::marker::PhantomData;
     use std::time::Instant;
+
+    pub struct RampHandler(hardware::Context, air::Context);
+    impl RampHandler {
+        pub fn new(ctx: &mut Context) -> Self {
+            RampHandler(ctx.hardware.clone(), ctx.air.clone())
+        }
+    }
+    impl Handler for RampHandler {
+        fn me(&mut self) -> Name {self.1.name()}
+
+        fn builder(&self) -> &RequestBuilder {self.1.builder()}
+        fn request(&mut self, request: Request) {self.1.request(request);}
+        fn get(&mut self, c_id: Id, id: Id, path: PathBuf) -> Option<Substance> {
+            self.1.query(&c_id, &id, path)
+        }
+
+        fn start_camera(&mut self) {
+            todo!()
+          //if let Some(camera) = ctx.hardware.camera() && let Ok(frame) = camera.frame() {
+          //    self.context.send(Request::event(prism::event::HardwareEvent::Camera(frame.into())));
+          //}
+        }
+        fn stop_camera(&mut self) {
+            todo!()
+            //if let Some(camera) = ctx.hardware.camera_existing() { camera.stop(); },
+        }
+        fn pick_photo(&mut self) {
+            todo!()
+        }
+
+        fn get_safe_area(&mut self) -> (f32, f32, f32, f32) {self.0.safe_area_insets()}
+        fn share_social(&mut self, data: String) {self.0.share().share(&data)}
+        fn set_clipboard(&mut self, data: String) {self.0.clipboard().set(data)}
+        fn get_clipboard(&mut self) -> String {self.0.clipboard().get()}
+        fn trigger_haptic(&mut self) {self.0.haptic().vibrate()}
+    }
+
+    use std::future::Future;
+    use std::sync::Arc;
+    use std::task::{Context as TContext, Poll, Wake};
+    use std::thread::{self, Thread};
+    use core::pin::pin;
+
+    /// A waker that wakes up the current thread when called.
+    struct ThreadWaker(Thread);
+
+    impl Wake for ThreadWaker {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+
+    /// Run a future to completion on the current thread.
+    fn block_on<T>(fut: impl Future<Output = T>) -> T {
+        // Pin the future so it can be polled.
+        let mut fut = pin!(fut);
+
+        // Create a new context to be passed to the future.
+        let t = thread::current();
+        let waker = Arc::new(ThreadWaker(t)).into();
+        let mut cx = TContext::from_waker(&waker);
+
+        // Run the future to completion.
+        loop {
+            match fut.as_mut().poll(&mut cx) {
+                Poll::Ready(res) => return res,
+                Poll::Pending => thread::park(),
+            }
+        }
+    }
 
     pub struct Ramp<B>{
         app: Box<dyn Drawable>,
         atlas: Atlas,
         canvas: Canvas,
         context: prism::Context,
-        instance: Instance,
         touching: bool,
         mouse: (f32, f32),
         scroll: Option<(f32, f32)>,
@@ -48,25 +119,24 @@ pub mod __private {
             }
         }
     }
-    impl<B: Builder> Services for Ramp<B> {}
     impl<B: Builder> Application for Ramp<B> {
-        async fn new(ctx: &mut Context, assets: Assets) -> Self {
-            let (mut context, receiver) = prism::Context::new();
+        fn new(ctx: &mut Context, dir: Dir<'static>) -> Self {
+            let handler = RampHandler::new(ctx);
+            let mut context = prism::Context::new(handler);
             let scale_factor = ctx.window.scale_factor;
             let screen = (
                 (ctx.window.size.0 as f64 / scale_factor) as f32,
                 (ctx.window.size.1 as f64 / scale_factor) as f32,
             );
 
-            let app = B::build(&mut context, assets);
+            let app = B::build(&mut context, Assets(dir));
             let size_request = app.request_size();
             let sized_app = app.build(screen, size_request);
             Ramp{
                 app,
                 atlas: Atlas::default(),
-                canvas: Canvas::new(ctx.window.handle.clone(), ctx.window.size.0, ctx.window.size.1).await,
+                canvas: block_on(Canvas::new(ctx.window.handle.clone(), ctx.window.size.0, ctx.window.size.1)),
                 context,
-                instance: Instance::new(receiver),
                 touching: false,
                 mouse: (0.0, 0.0),
                 screen,
@@ -77,7 +147,7 @@ pub mod __private {
                 _p: PhantomData::<fn() -> B>
             }
         }
-        async fn on_event(&mut self, ctx: &mut Context, event: Event) {
+        fn on_event(&mut self, ctx: &mut Context, event: Event) {
             let window = matches!(event, Event::Lifetime(Lifetime::Resumed)).then(|| ctx.window.handle.clone());
             if let Some(event) = match event {
                 Event::Lifetime(lifetime) => match lifetime {
@@ -92,46 +162,15 @@ pub mod __private {
                     Lifetime::Paused => None,
                     Lifetime::Close => None,
                     Lifetime::Draw => {
-                        self.instance.tick(&mut self.context);
                         self.app.event(&mut self.context, &self.sized_app, Box::new(TickEvent));
                         // println!("MPD {:?}", self.timer.elapsed().as_millis());
                         self.timer = Instant::now();
-                        if let Some(hardware) = self.instance.handle_requests() {
-                            match hardware {
-                                Hardware::GetCamera => {
-                                    if let Some(camera) = ctx.hardware.camera() && let Ok(frame) = camera.frame() {
-                                        self.context.send(Request::event(prism::event::HardwareEvent::Camera(frame.into())));
-                                    }
-                                }
-                                // Hardware::CameraFrame(FrameSettings),
-                                Hardware::StopCamera => if let Some(camera) = ctx.hardware.camera_existing() { camera.stop(); },
-                                // Hardware::PhotoPicker,
-                                Hardware::SetClipboard(data) => ctx.hardware.clipboard().set(data),
-                                Hardware::GetClipboard => {
-                                    if let Some(data) = ctx.hardware.clipboard().get() {
-                                        self.context.send(Request::event(prism::event::HardwareEvent::Clipboard(data)));
-                                    }
-                                },
-                                Hardware::GetSafeArea => {
-                                    let area = ctx.hardware.safe_area_insets();
-                                    self.context.send(Request::event(prism::event::HardwareEvent::SafeArea(area.0, area.1, area.2, area.3)));
-                                },
-                                // Hardware::SetCloud(String, String),
-                                // Hardware::GetCloud(String),
-                                Hardware::Share(data) => ctx.hardware.share(&data),
-                                Hardware::Haptic => ctx.hardware.haptic(),
-                                _ => {}
-                            }
-                        }
-
-                        while let Some(event) = self.instance.events.pop_front() {
+                        for event in self.context.1.drain(..).rev().collect::<Vec<_>>() {
                             if let Some(event) = event
                                 .pass(&mut self.context, &[prism::layout::Area{offset: (0.0, 0.0), size: self.sized_app.0}])
                                 .remove(0)
                             {
                                 self.app.event(&mut self.context, &self.sized_app, event);
-                                // let size_request = self.app.request_size();
-                                // self.sized_app = self.app.build(self.screen, size_request);
                             }
                         }
 
@@ -265,7 +304,7 @@ pub mod __private {
                     },
                     _ => None
                 }
-            } {self.instance.events.push_back(event);}
+            } {self.context.1.push(event);}
         }
     }
 

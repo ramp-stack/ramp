@@ -4,4 +4,4 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-ramp = {package="ramp2", version="0.1.4"}
+ramp = {package="ramp2", path = "../"}
