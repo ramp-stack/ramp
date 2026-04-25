@@ -8,11 +8,12 @@ pub mod __private {
 
     use wgpu_canvas::{Canvas, Atlas, Area, Shape, ShapeType, Item, Image};
     use prism::{Instance, Hardware, Request};
-    use prism::event::{KeyboardState, MouseState, MouseEvent, KeyboardEvent, Modifiers, TickEvent};
+    use prism::event::{KeyboardState, MouseState, MouseButton, MouseEvent, KeyboardEvent, Modifiers, TickEvent};
     use prism::drawable::SizedTree;
     use maverick_os::{Application, Context, Services};
     use maverick_os::window::{
-        Event, Lifetime, Input, TouchPhase, Touch, MouseScrollDelta, ElementState, Key, NamedKey, Modifiers as WinitModifiers
+        Event, Lifetime, Input, TouchPhase, Touch, MouseScrollDelta, ElementState, Key, NamedKey, Modifiers as WinitModifiers,
+        MouseButton as WinitMouseButton,
     };
 
     use std::marker::PhantomData;
@@ -171,15 +172,16 @@ pub mod __private {
                     Input::Touch(Touch { location, phase, .. }) => {
                         let location = (location.x as f32, location.y as f32);
                         let position = (self.logical(location.0), self.logical(location.1));
+                        // Touch has no button concept — treat as Left
                         let event = match phase {
                             TouchPhase::Started => {
                                 self.scroll = Some(position);
                                 self.touching = true;
-                                Some(MouseState::Pressed)
+                                Some(MouseState::Pressed(MouseButton::Left))
                             },
                             TouchPhase::Ended | TouchPhase::Cancelled => {
                                 self.touching = false;
-                                Some(MouseState::Released)
+                                Some(MouseState::Released(MouseButton::Left))
                             },
                             TouchPhase::Moved => {
                                 self.scroll.and_then(|(prev_x, prev_y)| {
@@ -204,10 +206,17 @@ pub mod __private {
                             Box::new(MouseEvent{position: Some(position), state: MouseState::Moved}) as Box<dyn prism::event::Event>
                         })
                     },
-                    Input::Mouse{state, ..} => {
+                    Input::Mouse{state, button, ..} => {
+                        // Convert winit MouseButton to prism MouseButton
+                        let btn = match button {
+                            WinitMouseButton::Left   => MouseButton::Left,
+                            WinitMouseButton::Right  => MouseButton::Right,
+                            WinitMouseButton::Middle => MouseButton::Middle,
+                            _ => MouseButton::Left,
+                        };
                         Some(Box::new(MouseEvent{position: Some(self.mouse), state: match state {
-                            ElementState::Pressed => MouseState::Pressed,
-                            ElementState::Released => MouseState::Released,
+                            ElementState::Pressed  => MouseState::Pressed(btn),
+                            ElementState::Released => MouseState::Released(btn),
                         }}) as Box<dyn prism::event::Event>)
                     },
                     Input::MouseWheel{delta, phase, ..} => {
@@ -276,18 +285,6 @@ pub mod __private {
                                     NamedKey::F10 => Some(prism::event::NamedKey::F10),
                                     NamedKey::F11 => Some(prism::event::NamedKey::F11),
                                     NamedKey::F12 => Some(prism::event::NamedKey::F12),
-                                    NamedKey::MediaPlay => Some(prism::event::NamedKey::MediaPlay),
-                                    NamedKey::MediaPause => Some(prism::event::NamedKey::MediaPause),
-                                    NamedKey::MediaPlayPause => Some(prism::event::NamedKey::MediaPlayPause),
-                                    NamedKey::MediaStop => Some(prism::event::NamedKey::MediaStop),
-                                    NamedKey::MediaTrackNext => Some(prism::event::NamedKey::MediaNextTrack),
-                                    NamedKey::MediaTrackPrevious => Some(prism::event::NamedKey::MediaPrevTrack),
-                                    NamedKey::AudioVolumeUp => Some(prism::event::NamedKey::VolumeUp),
-                                    NamedKey::AudioVolumeDown => Some(prism::event::NamedKey::VolumeDown),
-                                    NamedKey::AudioVolumeMute => Some(prism::event::NamedKey::VolumeMute),
-                                    NamedKey::PrintScreen => Some(prism::event::NamedKey::PrintScreen),
-                                    NamedKey::Pause => Some(prism::event::NamedKey::Pause),
-                                    NamedKey::ContextMenu => Some(prism::event::NamedKey::ContextMenu),
                                     _ => None
                                 }?)),
                                 Key::Character(c) => Some(prism::event::Key::Character(c.to_string())),
