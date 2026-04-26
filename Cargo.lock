@@ -226,6 +226,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
 
 [[package]]
+name = "arboard"
+version = "3.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0348a1c054491f4bfe6ab86a7b6ab1e44e45d899005de92f58b3df180b36ddaf"
+dependencies = [
+ "clipboard-win 5.4.1",
+ "image 0.25.9",
+ "log",
+ "objc2 0.6.3",
+ "objc2-app-kit 0.3.2",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation 0.3.2",
+ "parking_lot",
+ "percent-encoding",
+ "windows-sys 0.60.2",
+ "x11rb 0.13.2",
+]
+
+[[package]]
 name = "arc-swap"
 version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -596,7 +616,7 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04087c1d4a2aa259784a563932aee09cbb0869d490775e051096174b070f3e3d"
 dependencies = [
- "clipboard-win",
+ "clipboard-win 4.5.0",
  "objc",
  "objc-foundation",
  "objc_id",
@@ -610,9 +630,18 @@ version = "4.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7191c27c2357d9b7ef96baac1773290d4ca63b24205b82a3fd8a0637afcf0362"
 dependencies = [
- "error-code",
+ "error-code 2.3.1",
  "str-buf",
  "winapi",
+]
+
+[[package]]
+name = "clipboard-win"
+version = "5.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bde03770d3df201d4fb868f2c9c59e66a3e4e2bd06692a0fe701e7103c7e84d4"
+dependencies = [
+ "error-code 3.3.2",
 ]
 
 [[package]]
@@ -974,6 +1003,12 @@ dependencies = [
  "libc",
  "str-buf",
 ]
+
+[[package]]
+name = "error-code"
+version = "3.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dea2df4cf52843e0452895c455a1a2cfbb842a1e7329671acf418fdc53ed4c59"
 
 [[package]]
 name = "exr"
@@ -1772,12 +1807,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
-name = "lazy_static"
-version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
-
-[[package]]
 name = "leb128fmt"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1923,6 +1952,7 @@ dependencies = [
  "air",
  "android-activity",
  "android_logger",
+ "arboard",
  "arc-swap",
  "async-trait",
  "block2 0.6.2",
@@ -1934,7 +1964,6 @@ dependencies = [
  "hex",
  "image 0.25.9",
  "imageproc",
- "include_dir",
  "jni",
  "libc",
  "log",
@@ -3191,6 +3220,7 @@ checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 name = "ramp2"
 version = "0.1.6"
 dependencies = [
+ "include_dir",
  "maverick_os",
  "prism2",
  "wgpu_canvas",
@@ -4705,14 +4735,11 @@ dependencies = [
 
 [[package]]
 name = "wgpu_canvas"
-version = "5.0.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37deb8b3ff4088be909bea9666d1f58c50a95ba8300d5facd8a340465da43298"
+version = "5.0.4"
 dependencies = [
  "bytemuck",
  "fontdue",
  "image 0.25.9",
- "lazy_static",
  "wgpu",
 ]
 

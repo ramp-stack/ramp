@@ -1795,12 +1795,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
-name = "lazy_static"
-version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
-
-[[package]]
 name = "lebe"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1952,7 +1946,6 @@ dependencies = [
  "hex",
  "image 0.25.9",
  "imageproc",
- "include_dir",
  "jni",
  "libc",
  "log",
@@ -3199,6 +3192,7 @@ checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 name = "ramp2"
 version = "0.1.6"
 dependencies = [
+ "include_dir",
  "maverick_os",
  "prism2",
  "wgpu_canvas",
@@ -4649,14 +4643,11 @@ dependencies = [
 
 [[package]]
 name = "wgpu_canvas"
-version = "5.0.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37deb8b3ff4088be909bea9666d1f58c50a95ba8300d5facd8a340465da43298"
+version = "5.0.4"
 dependencies = [
  "bytemuck",
  "fontdue",
  "image 0.25.9",
- "lazy_static",
  "wgpu",
 ]
 
