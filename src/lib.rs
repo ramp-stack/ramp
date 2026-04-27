@@ -34,6 +34,7 @@ impl Handler for RampHandler {
 
     fn builder(&self) -> &RequestBuilder {self.1.builder()}
     fn request(&self, request: Request) {self.1.request(request);}
+    fn list(&self, c_id: Id) -> Vec<Id> {self.1.list(&c_id)}
     fn get(&self, c_id: Id, id: Id, path: PathBuf) -> Option<Substance> {
         self.1.query(&c_id, &id, path)
     }
