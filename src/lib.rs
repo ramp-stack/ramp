@@ -33,6 +33,7 @@ impl RampHandler {
         RampHandler(ctx.hardware.clone(), ctx.air.clone())
     }
 }
+
 impl Handler for RampHandler {
     fn me(&self) -> Name {self.1.name()}
 
@@ -44,10 +45,10 @@ impl Handler for RampHandler {
     }
 
     fn start_camera(&self) {
-        todo!()
+        self.0.start_camera();
     }
     fn stop_camera(&self) {
-        if let Some(camera) = self.0.camera_existing() { camera.stop(); }
+       self.0.stop_camera();
     }
     fn pick_photo(&self) {
         self.0.photo_picker();
@@ -215,22 +216,10 @@ impl<B: Builder> Application for Ramp<B> {
                 None
             },
             Input::CameraFrame(image) => {
-                self.app.event(
-                    &mut self.context,
-                    &self.sized_app,
-                    Box::new(prism::event::CameraFrame(image))
-                );
-                None
+                Some(Box::new(prism::event::CameraFrame(image)) as Box<dyn prism::event::Event>)
             },
-            Input::PickedPhoto(image, success) => {
-                if success {
-                    self.app.event(
-                        &mut self.context,
-                        &self.sized_app,
-                        Box::new(prism::event::PickedPhoto(image))
-                    );
-                }
-                None
+            Input::PickedPhoto(image) => {
+                Some(Box::new(prism::event::PickedPhoto(image)) as Box<dyn prism::event::Event>)
             },
             Input::ModifiersChanged(mods) => {
                 self.modifiers = prism::event::Modifiers {
