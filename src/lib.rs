@@ -14,6 +14,7 @@ use maverick_os::{hardware, air, window, Application, Context};
 use window::{
     Renderer, Handle, Input, TouchPhase, Touch, MouseScrollDelta, ElementState, Key, NamedKey
 };
+use air::Contracts;
 
 use std::path::PathBuf;
 use std::marker::PhantomData;
@@ -21,7 +22,10 @@ use std::time::Instant;
 
 pub use include_dir;
 
-pub trait Builder: 'static {fn build(ctx: &mut prism::Context) -> Box<dyn Drawable>;}
+pub trait Builder: 'static {
+    fn build(ctx: &mut prism::Context) -> Box<dyn Drawable>;
+    fn contracts() -> Contracts;
+}
 
 pub struct RampHandler(hardware::Context, air::Context);
 impl RampHandler {
@@ -40,17 +44,17 @@ impl Handler for RampHandler {
     }
 
     fn start_camera(&self) {
-        todo!()
+        // todo!()
       //if let Some(camera) = ctx.hardware.camera() && let Ok(frame) = camera.frame() {
       //    self.context.send(Request::event(prism::event::HardwareEvent::Camera(frame.into())));
       //}
     }
     fn stop_camera(&self) {
-        todo!()
+        // todo!()
         //if let Some(camera) = ctx.hardware.camera_existing() { camera.stop(); },
     }
     fn pick_photo(&self) {
-        todo!()
+        // todo!()
     }
 
     fn get_safe_area(&self) -> (f32, f32, f32, f32) {self.0.safe_area_insets()}
@@ -309,23 +313,29 @@ impl<B: Builder> Application for Ramp<B> {
             _ => None
         } {self.context.1.push(event);}
     }
+
+    fn contracts() -> Contracts {B::contracts()}
 }
 
 
 #[doc(hidden)]
 pub mod __private {
-    pub use crate::{Builder, Ramp, prism::drawable::Drawable, maverick_os, include_dir};
+    pub use crate::{Builder, Ramp, prism::drawable::Drawable, maverick_os, include_dir, maverick_os::air::Contracts};
 }
 
 #[macro_export]
 macro_rules! run {
-    ($($app:tt)*) => {
+    ([$($c:ty)?]; $($app:tt)*) => {
         pub use $crate::__private::*;
         struct PrismBuilder;
         impl Builder for PrismBuilder {
             fn build(ctx: &mut prism::Context) -> Box<dyn Drawable> {
                 let resources = include_dir::include_dir!("$CARGO_MANIFEST_DIR/resources");
                 Box::new(({$($app)*})(ctx, Assets(resources)))
+            }
+
+            fn contracts() -> Contracts {
+                Contracts::new()$(.add::<$c>())?
             }
         }
 

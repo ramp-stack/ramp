@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 ramp = {package="ramp2", path = "../"}
+serde = "1.0.228"

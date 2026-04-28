@@ -842,6 +842,7 @@ name = "demo"
 version = "0.1.0"
 dependencies = [
  "ramp2",
+ "serde",
 ]
 
 [[package]]
