@@ -4,7 +4,7 @@ use ramp::prism::layout::{Stack, Row, Column};
 use ramp::prism::layout::Area;
 use ramp::prism::event::{OnEvent, Event, CameraFrame, MouseEvent, MouseState, PickedPhoto};
 
-use ramp::maverick_os::air::{Contract, Substance, Id, Reactants, Reactant, Beaker, Name};
+use ramp::maverick_os::air::{Contracts, Contract, Substance, Id, Reactants, Reactant, Beaker, Name};
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -12,6 +12,7 @@ use std::convert::Infallible;
 use std::sync::Arc;
 
 use serde::{Serialize, Deserialize};
+//use ramp::air::{Reactant, Contract, RError, Beaker, Get, Create, from};
 
 const BG:          Color = Color(12,  12,  18,  255);
 const SURFACE:     Color = Color(22,  22,  32,  255);
