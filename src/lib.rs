@@ -33,6 +33,7 @@ impl RampHandler {
         RampHandler(ctx.hardware.clone(), ctx.air.clone())
     }
 }
+
 impl Handler for RampHandler {
     fn me(&self) -> Name {self.1.name()}
 
@@ -44,17 +45,13 @@ impl Handler for RampHandler {
     }
 
     fn start_camera(&self) {
-        // todo!()
-      //if let Some(camera) = ctx.hardware.camera() && let Ok(frame) = camera.frame() {
-      //    self.context.send(Request::event(prism::event::HardwareEvent::Camera(frame.into())));
-      //}
+        self.0.start_camera();
     }
     fn stop_camera(&self) {
-        // todo!()
-        //if let Some(camera) = ctx.hardware.camera_existing() { camera.stop(); },
+       self.0.stop_camera();
     }
     fn pick_photo(&self) {
-        // todo!()
+        self.0.photo_picker();
     }
 
     fn get_safe_area(&self) -> (f32, f32, f32, f32) {self.0.safe_area_insets()}
@@ -116,6 +113,7 @@ pub struct Ramp<B>{
     sized_app: SizedTree,
     scale_factor: f64,
     timer: Instant,
+    modifiers: prism::event::Modifiers,
     _p: PhantomData::<fn() -> B>
 }
 impl<B: Builder> Ramp<B> {
@@ -187,6 +185,7 @@ impl<B: Builder> Application for Ramp<B> {
             scroll: None,
             scale_factor,
             timer: Instant::now(),
+            modifiers: prism::event::Modifiers::default(),
             _p: PhantomData::<fn() -> B>
         }
     }
@@ -216,6 +215,21 @@ impl<B: Builder> Application for Ramp<B> {
                 self.sized_app = self.app.build(self.screen, size_request);
                 None
             },
+            Input::CameraFrame(image) => {
+                Some(Box::new(prism::event::CameraFrame(image)) as Box<dyn prism::event::Event>)
+            },
+            Input::PickedPhoto(image) => {
+                Some(Box::new(prism::event::PickedPhoto(image)) as Box<dyn prism::event::Event>)
+            },
+            Input::ModifiersChanged(mods) => {
+                self.modifiers = prism::event::Modifiers {
+                    shift: mods.state().shift_key(),
+                    control: mods.state().control_key(),
+                    alt: mods.state().alt_key(),
+                    meta: mods.state().super_key(),
+                };
+                None
+            },
             Input::Touch(Touch { location, phase, .. }) => {
                 let location = (location.x as f32, location.y as f32);
                 let position = (self.logical(location.0), self.logical(location.1));
@@ -236,7 +250,7 @@ impl<B: Builder> Application for Ramp<B> {
                             let dy = position.1 - prev_y;
                             let scroll_x = -dx * 1.0;
                             let scroll_y = -dy * 1.0;
-                    
+
                             (scroll_x.abs() > 0.01 || scroll_y.abs() > 0.01).then_some(
                                 MouseState::Scroll(scroll_x, scroll_y)
                             )
@@ -245,7 +259,7 @@ impl<B: Builder> Application for Ramp<B> {
                 }.map(|state| Box::new(MouseEvent{position: Some(position), state}) as Box<dyn prism::event::Event>);
                 self.mouse = position;
                 event
-            },                
+            },
             Input::CursorMoved{position, ..} => {
                 let position = (self.logical(position.0 as f32), self.logical(position.1 as f32));
                 (self.mouse != position).then_some({
@@ -281,7 +295,6 @@ impl<B: Builder> Application for Ramp<B> {
                             Box::new(MouseEvent{ position: Some(self.mouse), state }) as Box<dyn prism::event::Event>
                         })
                     },
-                    // TouchPhase::Ended => None,
                     _ => None
                 }
             },
@@ -297,17 +310,28 @@ impl<B: Builder> Application for Ramp<B> {
                             NamedKey::ArrowRight => Some(prism::event::NamedKey::ArrowRight),
                             NamedKey::ArrowUp => Some(prism::event::NamedKey::ArrowUp),
                             NamedKey::Delete | NamedKey::Backspace => Some(prism::event::NamedKey::Delete),
+                            NamedKey::Shift => Some(prism::event::NamedKey::Shift),
+                            NamedKey::Control => Some(prism::event::NamedKey::Control),
+                            NamedKey::Alt => Some(prism::event::NamedKey::Alt),
+                            NamedKey::Super | NamedKey::Hyper | NamedKey::Meta => Some(prism::event::NamedKey::Meta),
+                            NamedKey::CapsLock => Some(prism::event::NamedKey::CapsLock),
+                            NamedKey::NumLock => Some(prism::event::NamedKey::NumLock),
+                            NamedKey::Backspace => Some(prism::event::NamedKey::Backspace),
+                            NamedKey::Home => Some(prism::event::NamedKey::Home),
+                            NamedKey::End => Some(prism::event::NamedKey::End),
+                            NamedKey::ScrollLock => Some(prism::event::NamedKey::ScrollLock),
                             _ => None
                         }?)),
                         Key::Character(c) => Some(prism::event::Key::Character(c.to_string())),
                         Key::Unidentified(_) => None,
                         Key::Dead(_) => None,
-                    }?, 
+                    }?,
                     state: match event.state {
                         ElementState::Pressed if event.repeat => KeyboardState::Repeated,
                         ElementState::Pressed => KeyboardState::Pressed,
                         ElementState::Released => KeyboardState::Released,
-                    }
+                    },
+                    modifiers: self.modifiers,
                 }) as Box<dyn prism::event::Event>))
             },
             _ => None
