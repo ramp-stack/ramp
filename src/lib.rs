@@ -33,7 +33,7 @@ impl Handler for RampContext<'_> {
 
     fn start_camera(&mut self) -> Box<dyn Camera> {Box::new(self.0.hardware.camera.start())}
     fn pick_photo(&mut self) {
-        //self.0.hardware.photo_picker.open();
+        self.0.hardware.photo_picker.open();
     }
     fn get_safe_area(&self) -> (f32, f32, f32, f32) {
         todo!()
@@ -181,7 +181,7 @@ impl<B: Builder> Application for Ramp<B> {
                 self.instance.resize((self.logical(ctx.window.width as f32), self.logical(ctx.window.height as f32)));
             },
             Input::CameraFrame(image) => self.instance.emit(event::CameraFrame(image)),
-            Input::PickedPhoto(image) => self.instance.emit(event::PickedPhoto(image)),
+            Input::Photo(image) => self.instance.emit(event::PickedPhoto(image)),
             Input::ModifiersChanged(mods) => {
                 self.modifiers = event::Modifiers {
                     shift: mods.state().shift_key(),
