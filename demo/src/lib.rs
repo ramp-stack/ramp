@@ -13,21 +13,20 @@ use std::convert::Infallible;
 use std::sync::Arc;
 
 use serde::{Serialize, Deserialize};
-//use ramp::air::{Reactant, Contract, RError, Beaker, Get, Create, from};
 
 const BG:          Color = Color(12,  12,  18,  255);
 const SURFACE:     Color = Color(22,  22,  32,  255);
 const ACCENT:      Color = Color(99,  102, 241, 255);
 const ACCENT_DIM:  Color = Color(99,  102, 241, 60 );
 const BTN_BG:      Color = Color(30,  30,  46,  255);
-const BTN_BORDER:  Color = Color(255, 255, 255, 18 ); 
+const BTN_BORDER:  Color = Color(255, 255, 255, 18 );
 const WHITE_HI:    Color = Color(255, 255, 255, 230);
 const WHITE_MID:   Color = Color(255, 255, 255, 160);
 const WHITE_DIM:   Color = Color(255, 255, 255, 80 );
 
 const FA_VIDEO:      &str = "\u{f03d}";
 const FA_IMAGE:      &str = "\u{f03e}";
-const FA_SHARE:      &str = "\u{f1e0}"; 
+const FA_SHARE:      &str = "\u{f1e0}";
 const FA_COPY:       &str = "\u{f0c5}";
 const FA_PASTE:      &str = "\u{f0ea}";
 
@@ -39,7 +38,6 @@ fn icon_text(glyph: &str, fa: Arc<Font>, color: Color) -> Text {
         None,
     )
 }
-
 
 #[derive(Debug, Component, Clone)]
 pub struct BtnContent(Column, Text, Text);
@@ -53,7 +51,6 @@ impl BtnContent {
         )
     }
 }
-
 
 #[derive(Debug, Clone)]
 pub struct ClipboardCopied(pub String);
@@ -79,6 +76,13 @@ impl Event for CameraStarted {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct PhotoPicked;
+impl Event for PhotoPicked {
+    fn pass(self: Box<Self>, _ctx: &mut Context, children: &[Area]) -> Vec<Option<Box<dyn Event>>> {
+        children.iter().map(|_| Some(self.clone() as Box<dyn Event>)).collect()
+    }
+}
 
 fn label_text(s: impl Into<String>, font: Arc<Font>, size: f32, color: Color) -> Text {
     Text::new(
@@ -97,7 +101,6 @@ fn rect(w: f32, h: f32, color: Color) -> Shape {
     Shape { shape: ShapeType::Rectangle(0.0, (w, h), 0.0), color }
 }
 
-
 #[derive(Debug, Component, Clone)]
 pub struct StatusLabel(Stack, Shape, Text);
 
@@ -113,6 +116,9 @@ impl OnEvent for StatusLabel {
         if let Some(CameraStarted) = event.downcast_ref::<CameraStarted>() {
             self.2 = label_text("Camera active", font.clone(), 13.0, Color(134, 239, 172, 230));
         }
+        if let Some(PhotoPicked) = event.downcast_ref::<PhotoPicked>() {
+            self.2 = label_text("Photo loaded", font.clone(), 13.0, Color(134, 239, 172, 230));
+        }
         vec![event]
     }
 }
@@ -126,7 +132,6 @@ impl StatusLabel {
         )
     }
 }
-
 
 const CAM_W: f32 = 186.0;
 const CAM_H: f32 = 280.0;
@@ -166,7 +171,7 @@ impl Viewfinder {
 pub struct PhotoDisplay(Stack, Shape, Option<Shape>, Option<Image>);
 
 impl OnEvent for PhotoDisplay {
-    fn on_event(&mut self, _ctx: &mut Context, _sized: &SizedTree, event: Box<dyn Event>) -> Vec<Box<dyn Event>> {
+    fn on_event(&mut self, ctx: &mut Context, _sized: &SizedTree, event: Box<dyn Event>) -> Vec<Box<dyn Event>> {
         if let Some(PickedPhoto(img)) = event.downcast_ref::<PickedPhoto>() {
             self.2 = None;
             self.3 = Some(Image {
@@ -174,6 +179,7 @@ impl OnEvent for PhotoDisplay {
                 image: img.clone().into(),
                 color: None,
             });
+            ctx.emit(PhotoPicked);
         }
         vec![event]
     }
