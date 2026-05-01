@@ -1,8 +1,9 @@
-use ramp::prism::{self, Context, canvas::{Image, Shape, Text, ShapeType, Color, Font, Span, Align}, Assets};
+use ramp::prism::{self, Context, canvas::{Image, Shape, Text, ShapeType, Color, Font, Span, Align}};
 use ramp::prism::drawable::{Component, SizedTree};
 use ramp::prism::layout::{Stack, Row, Column};
 use ramp::prism::layout::Area;
 use ramp::prism::event::{OnEvent, Event, CameraFrame, MouseEvent, MouseState, PickedPhoto};
+use ramp::prism::Camera;
 
 use ramp::maverick_os::air::{Contracts, Contract, Substance, Id, Reactants, Reactant, Beaker, Name};
 
@@ -213,18 +214,18 @@ fn btn_bg(active: bool) -> Shape {
 }
 
 #[derive(Debug, Component, Clone)]
-pub struct StartCameraButton(Stack, Shape, BtnContent, #[skip] bool);
+pub struct StartCameraButton(Stack, Shape, BtnContent, #[skip] bool, #[skip] Option<Box<dyn Camera>>);
 
 impl OnEvent for StartCameraButton {
     fn on_event(&mut self, ctx: &mut Context, _sized: &SizedTree, event: Box<dyn Event>) -> Vec<Box<dyn Event>> {
         if let Some(MouseEvent { state: MouseState::Released, position: Some(_) }) = event.downcast_ref::<MouseEvent>() {
             self.3 = !self.3;
             if self.3 {
-                ctx.start_camera();
+                self.4 = Some(ctx.start_camera());
                 ctx.emit(CameraStarted);
                 self.1 = btn_bg(true);
             } else {
-                ctx.stop_camera();
+                self.4 = None;
                 self.1 = btn_bg(false);
             }
             ctx.trigger_haptic();
@@ -240,6 +241,7 @@ impl StartCameraButton {
             btn_bg(false),
             BtnContent::new(FA_VIDEO, "Camera", Arc::new(fa), Arc::new(ui), WHITE_MID),
             false,
+            None
         )
     }
 }
@@ -432,9 +434,9 @@ impl Reactant for SendMessage {
     }
 }
 
-ramp::run!{[ChatRoom]; |ctx: &mut Context, assets: Assets| {
-    let ui_font = Font::from_bytes(&assets.load_file("font.ttf").unwrap()).unwrap();
-    let fa_font = Font::from_bytes(&assets.load_file("fa-solid-900.ttf").unwrap()).unwrap();
+ramp::run!{[ChatRoom]; |ctx: &mut Context| {
+    let ui_font = Font::from_bytes(include_bytes!("../resources/font.ttf")).unwrap();
+    let fa_font = Font::from_bytes(include_bytes!("../resources/fa-solid-900.ttf")).unwrap();
 
     App::new(
         Viewers::new(
