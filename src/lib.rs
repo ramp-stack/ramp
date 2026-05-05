@@ -7,6 +7,7 @@ pub use include_dir::Dir;
 use wgpu_canvas::{Canvas, Area, Shape, ShapeType, Item, Image};
 use prism::{Instance, Handler, Camera, event};
 use maverick_os::{air, window, Application, Context};
+use crate::maverick_os::hardware::SafeAreaInsets;
 use air::{Contracts, Name, Id, Request, Substance, RequestBuilder};
 use window::{
     Renderer, Handle, Input, TouchPhase, Touch, MouseScrollDelta, ElementState, Key, NamedKey
@@ -36,19 +37,16 @@ impl Handler for RampContext<'_> {
         self.0.hardware.photo_picker.open();
     }
     fn get_safe_area(&self) -> (f32, f32, f32, f32) {
-        todo!()
-        //self.0.safe_area_insets()
+        SafeAreaInsets::get()
     }
     fn share_social(&mut self, data: String) {
-        //self.0.share(&data)
+        self.0.hardware.share.share(&data);
     }
     fn set_clipboard(&mut self, data: String) {
-        todo!()
-        //self.0.clipboard().set(data)
+        self.0.hardware.clipboard.set(data);
     }
     fn get_clipboard(&self) -> Option<String> {
-        todo!()
-        //self.0.clipboard().get()
+        self.0.hardware.clipboard.get()
     }
     fn trigger_haptic(&self) {self.0.hardware.haptics.vibrate()}
 }
@@ -63,8 +61,9 @@ struct ThreadWaker(Thread);
 impl Wake for ThreadWaker {fn wake(self: Arc<Self>) {self.0.unpark();}}
 
 pub struct RampRenderer<'surface, B> {
-    canvas: Canvas<'surface>,
-    _p: PhantomData<B>
+     canvas: Canvas<'surface>,
+    _p: PhantomData<B>,
+    _surface: PhantomData<&'surface ()>,
 }
 
 impl<'surface, B: Builder> Renderer<'surface> for RampRenderer<'surface, B> {
@@ -82,7 +81,7 @@ impl<'surface, B: Builder> Renderer<'surface> for RampRenderer<'surface, B> {
             }
         };
 
-        RampRenderer {canvas, _p: PhantomData::<B>}
+        RampRenderer {canvas, _p: PhantomData::<B>, _surface: PhantomData}
     }
 
     fn resize(&mut self, context: &window::Context) {
@@ -253,7 +252,7 @@ impl<B: Builder> Application for Ramp<B> {
                             self.instance.emit(event::MouseEvent{ position: Some(self.mouse), state });
                         }
                     },
-                    _ => {} 
+                    _ => {}
                 }
             },
             Input::Keyboard{event, ..} => {
@@ -294,7 +293,7 @@ impl<B: Builder> Application for Ramp<B> {
                     });
                 }
             },
-            _ => {} 
+            _ => {}
         }
     }
 
