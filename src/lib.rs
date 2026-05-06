@@ -341,7 +341,6 @@ impl<B: Builder> Application for Ramp<B> {
     fn contracts() -> Contracts {B::contracts()}
 }
 
-
 #[doc(hidden)]
 pub mod __private {
     pub use crate::{Builder, Ramp, prism::drawable::Drawable, maverick_os, include_dir, maverick_os::air::Contracts};
