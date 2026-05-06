@@ -325,7 +325,7 @@ pub mod __private {
 
 #[macro_export]
 macro_rules! run {
-    ([$($c:ty)?]; $($app:tt)*) => {
+    ([$($c:ty),* $(,)?]; $($app:tt)*) => {
         pub use $crate::__private::*;
         struct PrismBuilder;
         impl Builder for PrismBuilder {
