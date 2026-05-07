@@ -300,7 +300,6 @@ impl<B: Builder> Application for Ramp<B> {
     fn contracts() -> Contracts {B::contracts()}
 }
 
-
 #[doc(hidden)]
 pub mod __private {
     pub use crate::{Builder, Ramp, prism::drawable::Drawable, maverick_os, maverick_os::air::Contracts};
@@ -308,7 +307,8 @@ pub mod __private {
 
 #[macro_export]
 macro_rules! run {
-    ([$($c:ty)?]; $($app:tt)*) => {
+    ([$($c:ty),* $(,)?]; $($app:tt)*) => {
+        pub use $crate::__private::*;
         struct PrismBuilder;
         impl $crate::__private::Builder for PrismBuilder {
             fn build(ctx: &mut prism::Context) -> Box<dyn $crate::__private::Drawable> {
