@@ -89,6 +89,7 @@ pub struct Ramp<B> {
     scroll:       Option<(f32, f32)>,
     scale_factor: f64,
     modifiers:    event::Modifiers,
+    last_tick:    std::time::Instant,
     _p:           PhantomData<fn() -> B>,
 }
 
@@ -135,7 +136,6 @@ impl<B: Builder> Ramp<B> {
         }).collect()
     }
 
-    /// Emit a scroll event with the given dx/dy in logical pixels.
     fn emit_scroll(&mut self, dx: f32, dy: f32) {
         self.instance.emit(event::MouseEvent {
             position: Some(self.mouse),
@@ -163,6 +163,7 @@ impl<B: Builder> Application for Ramp<B> {
             scroll:       None,
             scale_factor,
             modifiers:    event::Modifiers::default(),
+            last_tick:    std::time::Instant::now(),
             _p:           PhantomData::<fn() -> B>,
         }
     }
@@ -170,6 +171,9 @@ impl<B: Builder> Application for Ramp<B> {
     fn on_input(&mut self, ctx: &mut Context, input: Input) {
         match input {
             Input::Tick => {
+                let now = std::time::Instant::now();
+                let _dt = now.duration_since(self.last_tick).as_secs_f32().min(0.1);
+                self.last_tick = now;
                 self.items = self.instance.draw(&mut RampContext(ctx));
             }
             Input::Resized => {
@@ -259,15 +263,16 @@ impl<B: Builder> Application for Ramp<B> {
                 let sf = self.scale_factor as f32;
 
                 match delta {
+                
                     MouseScrollDelta::LineDelta(x, y) => {
-                        const LINE_PX: f32 = 60.0;
+                        const LINE_UNITS: f32 = 3.0; 
                         let shift = self.modifiers.shift;
                         let (dx, dy) = if shift {
-                            (-y * LINE_PX, 0.0)
+                            (-y * LINE_UNITS, 0.0)
                         } else {
-                            (-x * LINE_PX, -y * LINE_PX)
+                            (-x * LINE_UNITS, -y * LINE_UNITS)
                         };
-                        if dx.abs() > 0.01 || dy.abs() > 0.01 {
+                        if dx.abs() > 0.001 || dy.abs() > 0.001 {
                             self.emit_scroll(dx, dy);
                         }
                     }
@@ -275,15 +280,12 @@ impl<B: Builder> Application for Ramp<B> {
                         match phase {
                             TouchPhase::Started => {
                                 self.scroll = Some((0.0, 0.0));
+                                self.emit_scroll(0.0, 0.0);
                             }
                             TouchPhase::Moved => {
-                                let prev = self.scroll.unwrap_or((0.0, 0.0));
-                                let scroll_x = prev.0 + (-(p.x as f32) * 0.2);
-                                let scroll_y = prev.1 + (-(p.y as f32) * 0.2);
-                                self.scroll = Some((scroll_x, scroll_y));
-                                let dx = scroll_x * sf;
-                                let dy = scroll_y * sf;
-                                if dx.abs() > 0.01 || dy.abs() > 0.01 {
+                                let dx = -(p.x as f32);
+                                let dy = -(p.y as f32);
+                                if dx.abs() > 0.001 || dy.abs() > 0.001 {
                                     self.emit_scroll(dx, dy);
                                 }
                             }
