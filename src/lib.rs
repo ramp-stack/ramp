@@ -259,20 +259,18 @@ impl<B: Builder> Application for Ramp<B> {
                 let sf = self.scale_factor as f32;
 
                 match delta {
-                    // ── Physical mouse wheel (LineDelta) ─────────────────────
-                    // Each notch fires immediately — no TouchPhase gating needed.
-                    // Positive y = scrolled up (content moves down), so negate.
                     MouseScrollDelta::LineDelta(x, y) => {
-                        // One notch ≈ 3 lines ≈ ~60 logical pixels at default
                         const LINE_PX: f32 = 60.0;
-                        let dx = -x * LINE_PX;
-                        let dy = -y * LINE_PX;
+                        let shift = self.modifiers.shift;
+                        let (dx, dy) = if shift {
+                            (-y * LINE_PX, 0.0)
+                        } else {
+                            (-x * LINE_PX, -y * LINE_PX)
+                        };
                         if dx.abs() > 0.01 || dy.abs() > 0.01 {
                             self.emit_scroll(dx, dy);
                         }
                     }
-                    // ── Trackpad / pixel-precise scroll (PixelDelta) ─────────
-                    // Accumulate across TouchPhase::Moved ticks as before.
                     MouseScrollDelta::PixelDelta(p) => {
                         match phase {
                             TouchPhase::Started => {
