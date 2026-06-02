@@ -134,6 +134,15 @@ impl<B: Builder> Ramp<B> {
             })
         }).collect()
     }
+
+    /// Emit a scroll event with the given dx/dy in logical pixels.
+    fn emit_scroll(&mut self, dx: f32, dy: f32) {
+        self.instance.emit(event::MouseEvent {
+            position: Some(self.mouse),
+            state:    event::MouseState::Scroll(dx, dy),
+            button:   None,
+        });
+    }
 }
 
 impl<B: Builder> Application for Ramp<B> {
@@ -208,7 +217,7 @@ impl<B: Builder> Application for Ramp<B> {
                     self.instance.emit(event::MouseEvent {
                         position: Some(position),
                         state,
-                        button: None, // touch has no mouse button
+                        button: None,
                     });
                 }
                 self.mouse = position;
@@ -220,7 +229,7 @@ impl<B: Builder> Application for Ramp<B> {
                     self.instance.emit(event::MouseEvent {
                         position: Some(position),
                         state:    event::MouseState::Moved,
-                        button:   None, // move has no button
+                        button:   None,
                     });
                 }
             }
@@ -240,8 +249,6 @@ impl<B: Builder> Application for Ramp<B> {
                     state:    ms,
                     button:   btn,
                 });
-                // also emit MouseEvent with button populated so on_mouse_press
-                // callbacks receive the correct button
                 self.instance.emit(event::MouseEvent {
                     position: Some(self.mouse),
                     state:    ms,
@@ -249,28 +256,45 @@ impl<B: Builder> Application for Ramp<B> {
                 });
             }
             Input::MouseWheel { delta, phase, .. } => {
-                match phase {
-                    TouchPhase::Started => {
-                        self.scroll = Some((0.0, 0.0));
-                    }
-                    TouchPhase::Moved => {
-                        if let Some((prev_x, prev_y)) = self.scroll {
-                            let pos = match delta {
-                                MouseScrollDelta::LineDelta(x, y) => (x.signum(), y.signum()),
-                                MouseScrollDelta::PixelDelta(p)   => (p.x as f32, p.y as f32),
-                            };
-                            let scroll_x = prev_x + (-pos.0 * 0.2);
-                            let scroll_y = prev_y + (-pos.1 * 0.2);
-                            let sf    = ctx.window.scale_factor as f32;
-                            let state = event::MouseState::Scroll(scroll_x * sf, scroll_y * sf);
-                            self.instance.emit(event::MouseEvent {
-                                position: Some(self.mouse),
-                                state,
-                                button: None, // scroll has no button
-                            });
+                let sf = self.scale_factor as f32;
+
+                match delta {
+                    // ── Physical mouse wheel (LineDelta) ─────────────────────
+                    // Each notch fires immediately — no TouchPhase gating needed.
+                    // Positive y = scrolled up (content moves down), so negate.
+                    MouseScrollDelta::LineDelta(x, y) => {
+                        // One notch ≈ 3 lines ≈ ~60 logical pixels at default
+                        const LINE_PX: f32 = 60.0;
+                        let dx = -x * LINE_PX;
+                        let dy = -y * LINE_PX;
+                        if dx.abs() > 0.01 || dy.abs() > 0.01 {
+                            self.emit_scroll(dx, dy);
                         }
                     }
-                    _ => {}
+                    // ── Trackpad / pixel-precise scroll (PixelDelta) ─────────
+                    // Accumulate across TouchPhase::Moved ticks as before.
+                    MouseScrollDelta::PixelDelta(p) => {
+                        match phase {
+                            TouchPhase::Started => {
+                                self.scroll = Some((0.0, 0.0));
+                            }
+                            TouchPhase::Moved => {
+                                let prev = self.scroll.unwrap_or((0.0, 0.0));
+                                let scroll_x = prev.0 + (-(p.x as f32) * 0.2);
+                                let scroll_y = prev.1 + (-(p.y as f32) * 0.2);
+                                self.scroll = Some((scroll_x, scroll_y));
+                                let dx = scroll_x * sf;
+                                let dy = scroll_y * sf;
+                                if dx.abs() > 0.01 || dy.abs() > 0.01 {
+                                    self.emit_scroll(dx, dy);
+                                }
+                            }
+                            TouchPhase::Ended | TouchPhase::Cancelled => {
+                                self.scroll = None;
+                            }
+                            _ => {}
+                        }
+                    }
                 }
             }
             Input::Keyboard { event, .. } => {
