@@ -208,21 +208,21 @@ impl<B: Builder> Application for Ramp<B> {
                             )
                         })
                     }
-                } {self.instance.emit(event::MouseEvent{position: Some(position), state});}
+                } {self.instance.emit(event::MouseEvent{position: Some(position), state, ..Default::default()});}
                 self.mouse = position;
             },
             Input::CursorMoved{position, ..} => {
                 let position = (self.logical(position.0 as f32), self.logical(position.1 as f32));
                 if self.mouse != position {
                     self.mouse = position;
-                    self.instance.emit(event::MouseEvent{position: Some(position), state: event::MouseState::Moved});
+                    self.instance.emit(event::MouseEvent{position: Some(position), state: event::MouseState::Moved, ..Default::default()});
                 }
             },
             Input::Mouse{state, ..} => {
                 self.instance.emit(event::MouseEvent{position: Some(self.mouse), state: match state {
                     ElementState::Pressed => event::MouseState::Pressed,
                     ElementState::Released => event::MouseState::Released,
-                }});
+                }, ..Default::default()});
             },
             Input::MouseWheel{delta, phase, ..} => {
                 match phase {
@@ -242,7 +242,7 @@ impl<B: Builder> Application for Ramp<B> {
                             let sf = ctx.window.scale_factor as f32;
                             let state = event::MouseState::Scroll(scroll_x * sf, scroll_y * sf);
 
-                            self.instance.emit(event::MouseEvent{ position: Some(self.mouse), state });
+                            self.instance.emit(event::MouseEvent{ position: Some(self.mouse), state, ..Default::default() });
                         }
                     },
                     _ => {}
