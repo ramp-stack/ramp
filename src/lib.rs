@@ -6,9 +6,9 @@ pub use include_dir::Dir;
 
 use wgpu_canvas::{Canvas, Area, Shape, ShapeType, Item, Image};
 use prism::{Instance, Handler, Camera, event};
-use maverick_os::{air, window, Application, Context};
-use crate::maverick_os::hardware::SafeAreaInsets;
-use air::{Contracts, Name, Id, Request, Substance, RequestBuilder};
+use maverick_os::{window, Application, Context, hardware::SafeAreaInsets};
+use air::{Id, Name};
+use air::Contract;
 use window::{
     Renderer, Handle, Input, TouchPhase, Touch, MouseScrollDelta, ElementState, Key, NamedKey
 };
@@ -18,19 +18,11 @@ use std::marker::PhantomData;
 
 pub trait Builder: 'static {
     fn build(ctx: &mut prism::Context) -> Box<dyn Drawable>;
-    fn contracts() -> Contracts;
 }
 
 pub struct RampContext<'a>(&'a mut Context);
 impl Handler for RampContext<'_> {
-    fn me(&self) -> Name {self.0.air.name()}
-
-    fn builder(&self) -> &RequestBuilder {self.0.air.builder()}
-    fn request(&mut self, request: Request) {self.0.air.request(request);}
-    fn list(&self, c_id: Id) -> Vec<Id> {self.0.air.list(&c_id)}
-    fn get(&self, c_id: Id, id: Id, path: PathBuf) -> Option<Substance> {
-        self.0.air.query(&c_id, &id, path)
-    }
+    fn air(&mut self) -> &mut air::Context {&mut self.0.air}
 
     fn start_camera(&mut self) -> Box<dyn Camera> {Box::new(self.0.hardware.camera.start())}
     fn pick_photo(&mut self) {
@@ -49,6 +41,7 @@ impl Handler for RampContext<'_> {
         self.0.hardware.clipboard.get()
     }
     fn trigger_haptic(&self) {self.0.hardware.haptics.vibrate()}
+    fn push_notification(&self, header: &str, body: &str) {self.0.hardware.notifications.push(&header, &body);}
 }
 
 use std::future::Future;
@@ -296,25 +289,22 @@ impl<B: Builder> Application for Ramp<B> {
             _ => {}
         }
     }
-
-    fn contracts() -> Contracts {B::contracts()}
 }
 
 #[doc(hidden)]
 pub mod __private {
-    pub use crate::{Builder, Ramp, prism::drawable::Drawable, maverick_os, maverick_os::air::Contracts};
+    pub use crate::{Builder, Ramp, prism::drawable::Drawable, maverick_os};
 }
 
 #[macro_export]
 macro_rules! run {
-    ([$($c:ty),* $(,)?]; $($app:tt)*) => {
+    ($($app:tt)*) => {
         pub use $crate::__private::*;
         struct PrismBuilder;
         impl $crate::__private::Builder for PrismBuilder {
             fn build(ctx: &mut prism::Context) -> Box<dyn $crate::__private::Drawable> {
                 Box::new(({$($app)*})(ctx))
             }
-            fn contracts() -> $crate::__private::Contracts {$crate::__private::Contracts::new()$(.add::<$c>())?}
         }
 
         $crate::__private::maverick_os::start!($crate::__private::Ramp<PrismBuilder>);
