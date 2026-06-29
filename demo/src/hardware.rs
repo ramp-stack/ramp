@@ -1,8 +1,8 @@
 use ramp::prism;
-use ramp::prism::{Context, canvas::{Image, Shape, Text, ShapeType, Color, Font, Span, Align}};
-use ramp::prism::drawable::{Component, SizedTree};
-use ramp::prism::layout::{Stack, Row, Column, Offset, Size, Padding};
-use ramp::prism::event::{OnEvent, Event, CameraFrame, PickedPhoto, MouseEvent, MouseState};
+use prism::{Context, canvas::{Image, Shape, Text, ShapeType, Color, Font, Align}};
+use prism::drawable::{Component, SizedTree};
+use prism::layout::{Stack, Row, Column, Offset, Size, Padding};
+use prism::event::{OnEvent, Event, CameraFrame, PickedPhoto, MouseEvent, MouseState, MouseButton};
 use std::sync::{Arc, Mutex};
 use std::rc::Rc;
 use std::ops::Deref;
@@ -28,6 +28,66 @@ pub const ROW_R: f32 = 14.0;
 
 const FA_COPY:  &str = "\u{f0c5}";
 const FA_PASTE: &str = "\u{f0ea}";
+const FA_VIDEO: &str = "\u{f03d}";
+const FA_IMAGE: &str = "\u{f03e}";
+const FA_SHARE: &str = "\u{f1e0}";
+const COPY_TEXT: &str = "RAMP DEMO CHECK IT!";
+
+#[derive(Debug, Component, Clone)]
+pub struct App(
+    Column,
+    MediaPanels,
+    Toolbar,
+    CopyPastePanel,
+);
+
+impl OnEvent for App {}
+
+impl App {
+    pub fn new() -> Self {
+        let ui_font = Font::from_bytes(include_bytes!("../resources/font.ttf")).unwrap();
+        let fa_font = Font::from_bytes(include_bytes!("../resources/fa-solid-900.ttf")).unwrap();
+
+        let mk = |glyph: &str, label: &str| {
+            BtnContent::new(glyph, label, fa_font.clone(), ui_font.clone(), WHITE_MID)
+        };
+
+        let size = Btn::size(3);
+
+        let toolbar = Toolbar::new(
+            Btn::camera(mk(FA_VIDEO, "Camera"), size),
+            vec![
+                Btn::impulse(mk(FA_IMAGE, "Photo"), size, |ctx, _| {
+                    ctx.pick_photo();
+                }),
+                Btn::impulse(mk(FA_SHARE, "Share"), size, |ctx, _| {
+                    ctx.share_social(COPY_TEXT.to_string());
+                }),
+            ],
+        );
+
+        let copy_paste = CopyPastePanel::new(
+            fa_font.clone(),
+            ui_font.clone(),
+            COPY_TEXT,
+            |ctx, text| {
+                ctx.set_clipboard(text.to_string());
+            },
+            |ctx, on_pasted| {
+                if let Some(text) = ctx.get_clipboard() {
+                    on_pasted(&text);
+                }
+            },
+        );
+
+        App(
+            Column::center(24.0),
+            MediaPanels::default(),
+            toolbar,
+            copy_paste,
+        )
+    }
+}
 
 fn rounded_rect(w: f32, h: f32, r: f32, color: Color) -> Shape {
     Shape { 
@@ -36,24 +96,7 @@ fn rounded_rect(w: f32, h: f32, r: f32, color: Color) -> Shape {
     }
 }
 
-fn make_text(s: impl Into<String>, font: Arc<Font>, size: f32, color: Color) -> Text {
-    Text::new(
-        vec![Span::new(s.into(), size, Some(size * 1.4), font, color, 0.0)],
-        None,
-        Align::Center,
-        None,
-    )
-}
-
-fn make_icon(glyph: &str, font: Arc<Font>, size: f32, color: Color) -> Text {
-    make_text(glyph, font, size, color)
-}
-
 pub struct Cb<F: ?Sized>(Arc<F>);
-
-impl<F: ?Sized> Cb<F> {
-    pub fn new(f: F) -> Self where F: Sized { Cb(Arc::new(f)) }
-}
 
 impl<F: ?Sized> Clone for Cb<F> {
     fn clone(&self) -> Self {
@@ -63,7 +106,7 @@ impl<F: ?Sized> Clone for Cb<F> {
 
 impl<F: ?Sized> Deref for Cb<F> {
     type Target = F;
-    fn deref(&self) -> &F { &*self.0 }
+    fn deref(&self) -> &F { &self.0 }
 }
 
 impl<F: ?Sized> fmt::Debug for Cb<F> {
@@ -150,11 +193,11 @@ pub struct BtnContent(Column, Text, Text);
 impl OnEvent for BtnContent {}
 
 impl BtnContent {
-    pub fn new(glyph: &str, label: &str, fa: Arc<Font>, ui: Arc<Font>, color: Color) -> Self {
+    pub fn new(glyph: &str, label: &str, fa: Font, ui: Font, color: Color) -> Self {
         BtnContent(
             Column::center(4.0),
-            make_icon(glyph, fa, 22.0, color),
-            make_text(label, ui, 11.0, color),
+            Text::new(glyph, fa, 22.0, color, Align::Center),
+            Text::new(label, ui, 11.0, color, Align::Center)
         )
     }
 }
@@ -162,10 +205,11 @@ impl BtnContent {
 #[derive(Debug, Clone, PartialEq)]
 enum BtnMode { 
     Impulse,
-    Toggle,
     Camera,
 }
 
+type Cam = Option<Box<dyn Camera>>;
+type Callback = Cb<dyn Fn(&mut Context, bool) + Send + Sync>;
 #[derive(Debug, Component, Clone)]
 pub struct Btn(
     Stack,
@@ -173,19 +217,14 @@ pub struct Btn(
     BtnContent,
     #[skip] bool, 
     #[skip] BtnMode, 
-    #[skip] Cb<dyn Fn(&mut Context, bool) + Send + Sync>,
-    #[skip] Option<Rc<Mutex<Option<Box<dyn Camera>>>>>,
+    #[skip] Callback,
+    #[skip] Option<Rc<Mutex<Cam>>>,
 );
 
 impl OnEvent for Btn {
     fn on_event(&mut self, ctx: &mut Context, _sized: &SizedTree, event: Box<dyn Event>) -> Vec<Box<dyn Event>> {
-        if let Some(MouseEvent { state: MouseState::Released, position: Some(_) }) = event.downcast_ref::<MouseEvent>() {
+        if let Some(MouseEvent { state: MouseState::Released(MouseButton::Left), position: Some(_) }) = event.downcast_ref::<MouseEvent>() {
             match self.4 {
-                BtnMode::Toggle => {
-                    self.3 = !self.3;
-                    self.1 = Self::bg(self.1.shape.size().0, self.3);
-                    (self.5)(ctx, self.3);
-                }
                 BtnMode::Camera => {
                     self.3 = !self.3;
                     if self.3 {
@@ -246,14 +285,6 @@ impl Btn {
         Self::new_internal(content, size, BtnMode::Camera, |_, _| {})
     }
 
-    pub fn toggle(
-        content: BtnContent,
-        size: f32,
-        on_press: impl Fn(&mut Context, bool) + Send + Sync + 'static,
-    ) -> Self {
-        Self::new_internal(content, size, BtnMode::Toggle, on_press)
-    }
-
     pub fn impulse(
         content: BtnContent,
         size: f32,
@@ -296,13 +327,14 @@ impl OnEvent for ActionRow {
         _sized: &SizedTree,
         event: Box<dyn Event>,
     ) -> Vec<Box<dyn Event>> {
-        if let Some(MouseEvent { state: MouseState::Released, position: Some(_) }) = event.downcast_ref::<MouseEvent>() {
+        if let Some(MouseEvent { state: MouseState::Released(MouseButton::Left), position: Some(_) }) = event.downcast_ref::<MouseEvent>() {
             if let Some((new_label, new_value)) = (self.3)(ctx) {
                 let label_font = self.2.2.spans[0].font.clone();
                 let value_font = self.2.3.spans[0].font.clone();
                 
-                self.2.2 = make_text(new_label, label_font, 13.0, WHITE_MID);
-                self.2.3 = make_text(new_value, value_font, 13.0, WHITE_HI);
+            
+                self.2.2 = Text::new(&new_label, label_font, 13.0, WHITE_MID, Align::Center);
+                self.2.3 = Text::new(&new_value, value_font, 13.0, WHITE_HI, Align::Center);
             }
             ctx.trigger_haptic();
         }
@@ -312,8 +344,8 @@ impl OnEvent for ActionRow {
 
 impl ActionRow {
     pub fn new(
-        fa: Arc<Font>,
-        ui: Arc<Font>,
+        fa: Font,
+        ui: Font,
         icon: &str,
         label: &str,
         value: &str,
@@ -321,9 +353,9 @@ impl ActionRow {
     ) -> Self {
         let content = ActionRowContent(
             Row::start(6.0),
-            make_icon(icon, fa, 16.0, WHITE_MID),
-            make_text(label, ui.clone(), 13.0, WHITE_MID),
-            make_text(value, ui, 13.0, if value == "—" { WHITE_DIM } else { WHITE_HI }),
+            Text::new(icon, fa, 16.0, WHITE_MID, Align::Center),
+            Text::new(label, ui.clone(), 13.0, WHITE_MID, Align::Center),
+            Text::new(value, ui, 13.0, if value == "—" { WHITE_DIM } else { WHITE_HI }, Align::Center),
         );
 
         ActionRow(
@@ -348,8 +380,8 @@ impl OnEvent for CopyPastePanel {}
 
 impl CopyPastePanel {
     pub fn new(
-        fa: Arc<Font>,
-        ui: Arc<Font>,
+        fa: Font,
+        ui: Font,
         copy_text: &str,
         on_copy: impl Fn(&mut Context, &str) + Send + Sync + 'static,
         on_paste: impl Fn(&mut Context, &dyn Fn(&str)) + Send + Sync + 'static,

@@ -1,39 +1,44 @@
-pub use prism;
+pub use air;
+use air::Services;
 
 pub use maverick_os;
 pub use prism::drawable::Drawable;
-pub use include_dir::Dir;
 
-use wgpu_canvas::{Canvas, Area, Shape, ShapeType, Item, Image};
-use prism::{Instance, Handler, Camera, event};
+pub use prism;
+
+use wgpu_canvas::{Canvas, Instruction};
 use maverick_os::{window, Application, Context, hardware::SafeAreaInsets};
-use window::{
-    Renderer, Handle, Input, TouchPhase, Touch, MouseScrollDelta, ElementState, Key, NamedKey,
-    MouseButton,
-};
+use window::{Renderer, Handle, Input, DeviceInput, MouseState, MouseButton, KeyboardState, Key};
+use prism::{Instance, Handler, Camera, event};
 
 use std::marker::PhantomData;
+use std::future::Future;
+use std::sync::Arc;
+use std::task::{Context as TContext, Poll, Wake};
+use std::thread::{self, Thread};
+use core::pin::pin;
 
 pub trait Builder: 'static {
+    fn services() -> Services;
     fn build(ctx: &mut prism::Context) -> Box<dyn Drawable>;
 }
 
-pub struct RampContext<'a>(&'a mut Context);
-impl Handler for RampContext<'_> {
-    fn air(&mut self) -> &mut air::Context {&mut self.0.air}
-    fn start_camera(&mut self) -> Box<dyn Camera> {
+pub struct RampContext(Context);
+impl Handler for RampContext {
+    fn air(&self) -> &air::Context {&self.0.air}
+    fn start_camera(&self) -> Box<dyn Camera> {
         Box::new(self.0.hardware.camera.start())
     }
-    fn pick_photo(&mut self) {
+    fn pick_photo(&self) {
         self.0.hardware.photo_picker.open();
     }
     fn get_safe_area(&self) -> (f32, f32, f32, f32) {
         SafeAreaInsets::get() 
     }
-    fn share_social(&mut self, data: String) {
+    fn share_social(&self, data: String) {
         self.0.hardware.share.share(&data);
     }
-    fn set_clipboard(&mut self, data: String) {
+    fn set_clipboard(&self, data: String) {
         self.0.hardware.clipboard.set(data);
     }
     fn get_clipboard(&self) -> Option<String> {
@@ -42,16 +47,7 @@ impl Handler for RampContext<'_> {
     fn trigger_haptic(&self) {
         self.0.hardware.haptics.vibrate()
     }
-    fn push_notification(&self, header: &str, body: &str) {
-        self.0.hardware.notifications.push(header, body);
-    }
 }
-
-use std::future::Future;
-use std::sync::Arc;
-use std::task::{Context as TContext, Poll, Wake};
-use std::thread::{self, Thread};
-use core::pin::pin;
 
 struct ThreadWaker(Thread);
 impl Wake for ThreadWaker { fn wake(self: Arc<Self>) { self.0.unpark(); } }
@@ -84,263 +80,105 @@ impl<'surface, B: Builder> Renderer<'surface> for RampRenderer<'surface, B> {
     }
 
     fn draw(&mut self, _context: &window::Context, app: &Ramp<B>) {
-        self.canvas.draw(app.get_drawables());
+        self.canvas.draw(app.instructions.clone().into_iter().map(|mut i| {
+            i.scale(app.scale_factor); i
+        }).collect());
     }
 }
 
 pub struct Ramp<B> {
     instance: Instance,
-    items: Vec<(Area, Item)>,
-    touching: bool,
-    mouse: (f32, f32),
-    scroll: Option<(f32, f32)>,
-    scale_factor: f64,
-    modifiers: event::Modifiers,
+    instructions: Vec<Instruction>,
+    scale_factor: f32,
     last_tick: std::time::Instant,
     _p: PhantomData<fn() -> B>,
 }
-
-impl<B: Builder> Ramp<B> {
-    pub fn physical(&self, x: f32) -> f32 { (x as f64 * self.scale_factor) as f32 }
-    pub fn logical(&self, x: f32) -> f32  { (x as f64 / self.scale_factor) as f32 }
-
-    fn shape(&self, shape: ShapeType) -> ShapeType {
-        match shape {
-            ShapeType::Ellipse(s, (w, h), a) =>
-                ShapeType::Ellipse(self.physical(s), (self.physical(w), self.physical(h)), a),
-            ShapeType::Rectangle(s, (w, h), a) =>
-                ShapeType::Rectangle(self.physical(s), (self.physical(w), self.physical(h)), a),
-            ShapeType::RoundedRectangle(s, (w, h), a, c) =>
-                ShapeType::RoundedRectangle(self.physical(s), (self.physical(w), self.physical(h)), a, self.physical(c)),
-        }
-    }
-
-    fn get_drawables(&self) -> Vec<(Area, Item)> {
-        self.items.clone().into_iter().map(|(a, i)| {
-            (Area {
-                offset: (self.physical(a.offset.0), self.physical(a.offset.1)),
-                bounds: a.bounds.map(|b| (self.physical(b.0), self.physical(b.1), self.physical(b.2), self.physical(b.3))),
-            }, match i {
-                Item::Shape(shape) => Item::Shape(Shape {
-                    shape: self.shape(shape.shape),
-                    color: shape.color,
-                }),
-                Item::Image(image) => Item::Image(Image {
-                    shape: self.shape(image.shape),
-                    image: image.image,
-                    color: image.color,
-                }),
-                Item::Text(mut text) => Item::Text({
-                    text.width = text.width.map(|w| self.physical(w));
-                    text.spans.iter_mut().for_each(|span| {
-                        span.font_size   = self.physical(span.font_size);
-                        span.line_height = span.line_height.map(|l| self.physical(l));
-                        span.kerning     = self.physical(span.kerning);
-                    });
-                    text
-                }),
-            })
-        }).collect()
-    }
-
-    fn emit_scroll(&mut self, dx: f32, dy: f32) {
-        self.instance.emit(event::MouseEvent {
-            position: Some(self.mouse),
-            state: event::MouseState::Scroll(dx, dy),
-            button: None,
-        });
-    }
-}
-
 impl<B: Builder> Application for Ramp<B> {
     type Renderer<'surface> = RampRenderer<'surface, B>;
 
-    fn new(ctx: &mut Context) -> Self {
-        let scale_factor = ctx.window.scale_factor;
-        let screen = (
-            (ctx.window.width  as f64 / scale_factor) as f32,
-            (ctx.window.height as f64 / scale_factor) as f32,
-        );
-        let instance = Instance::new(B::build, &mut RampContext(ctx), screen);
+    fn services() -> Services {B::services()}
+
+    fn new(ctx: &Context) -> Self {
+        let scale_factor = ctx.window.scale_factor as f32;
+        let screen = (ctx.window.width as f32 / scale_factor, ctx.window.height as f32 / scale_factor);
+        let instance = Instance::new(B::build, &mut RampContext(ctx.clone()), screen);
         Ramp {
             instance,
-            items: Vec::new(),
-            touching: false,
-            mouse: (0.0, 0.0),
-            scroll: None,
+            instructions: Vec::new(),
             scale_factor,
-            modifiers: event::Modifiers::default(),
             last_tick: std::time::Instant::now(),
             _p: PhantomData::<fn() -> B>,
         }
     }
 
-    fn on_input(&mut self, ctx: &mut Context, input: Input) {
+    fn on_input(&mut self, ctx: &Context, input: Input) {
         match input {
             Input::Tick => {
                 let now = std::time::Instant::now();
                 let _dt = now.duration_since(self.last_tick).as_secs_f32().min(0.1);
                 self.last_tick = now;
-                self.items = self.instance.draw(&mut RampContext(ctx));
+                self.instructions = self.instance.draw(&mut RampContext(ctx.clone()));
             }
             Input::Resized => {
-                self.scale_factor = ctx.window.scale_factor;
+                self.scale_factor = ctx.window.scale_factor as f32;
                 self.instance.resize((
-                    self.logical(ctx.window.width  as f32),
-                    self.logical(ctx.window.height as f32),
+                    ctx.window.width as f32 / self.scale_factor,
+                    ctx.window.height as f32 / self.scale_factor
                 ));
             }
             Input::CameraFrame(image) => self.instance.emit(event::CameraFrame(image)),
-            Input::Photo(image) => self.instance.emit(event::PickedPhoto(image)),
-            Input::ModifiersChanged(mods) => {
-                self.modifiers = event::Modifiers {
-                    shift: mods.state().shift_key(),
-                    control: mods.state().control_key(),
-                    alt: mods.state().alt_key(),
-                    meta: mods.state().super_key(),
-                };
-            }
-            Input::Touch(Touch { location, phase, .. }) => {
-                let location = (location.x as f32, location.y as f32);
-                let position = (self.logical(location.0), self.logical(location.1));
-                if let Some(state) = match phase {
-                    TouchPhase::Started => {
-                        self.scroll  = Some(position);
-                        self.touching = true;
-                        Some(event::MouseState::Pressed)
+            Input::SelectedPhoto(image) => self.instance.emit(event::PickedPhoto(image)),
+            Input::Device(_, event) => match event.scale(1.0 / self.scale_factor) {
+                DeviceInput::Keyboard(key, state, modifiers) => self.instance.emit(event::KeyboardEvent{key: match key {
+                    Key::Escape => event::Key::Escape,
+                    Key::Enter => event::Key::Enter,
+                    Key::Tab => event::Key::Tab,
+                    Key::Space => event::Key::Space,
+                    Key::Up => event::Key::Up,
+                    Key::Down => event::Key::Down,
+                    Key::Left => event::Key::Left,
+                    Key::Right => event::Key::Right,
+                    Key::Delete => event::Key::Delete,
+                    Key::Backspace => event::Key::Backspace,
+                    Key::Home => event::Key::Home,
+                    Key::End => event::Key::End,
+                    Key::Shift => event::Key::Shift,
+                    Key::Control => event::Key::Control,
+                    Key::Alt => event::Key::Alt,
+                    Key::SuperMeta => event::Key::SuperMeta,
+                    Key::CapsLock => event::Key::CapsLock,
+                    Key::NumLock => event::Key::NumLock,
+                    Key::ScrollLock => event::Key::ScrollLock,
+                    Key::Character(char) => event::Key::Character(char)
+                }, state: match state {
+                    KeyboardState::Pressed => event::KeyboardState::Pressed,
+                    KeyboardState::Repeated => event::KeyboardState::Repeated,
+                    KeyboardState::Released => event::KeyboardState::Released,
+                }, modifiers: event::Modifiers{
+                    shift: modifiers.shift,
+                    control: modifiers.control,
+                    alt: modifiers.alt,
+                    supermeta: modifiers.supermeta,
+                }}),
+                DeviceInput::Mouse(position, state) => self.instance.emit(event::MouseEvent{
+                    position: Some(position),
+                    state: match state {
+                        MouseState::Pressed(button) => event::MouseState::Pressed(match button {
+                            MouseButton::Left => event::MouseButton::Left,
+                            MouseButton::Middle => event::MouseButton::Middle,
+                            MouseButton::Right => event::MouseButton::Right,
+                        }),
+                        MouseState::Released(button) => event::MouseState::Released(match button {
+                            MouseButton::Left => event::MouseButton::Left,
+                            MouseButton::Middle => event::MouseButton::Middle,
+                            MouseButton::Right => event::MouseButton::Right,
+                        }),
+                        MouseState::Moved => event::MouseState::Moved,
+                        MouseState::Scroll(dx, dy) => event::MouseState::Scroll(dx, dy),
                     }
-                    TouchPhase::Ended | TouchPhase::Cancelled => {
-                        self.touching = false;
-                        Some(event::MouseState::Released)
-                    }
-                    TouchPhase::Moved => {
-                        self.scroll.and_then(|(prev_x, prev_y)| {
-                            self.scroll = Some(position);
-                            let dx = position.0 - prev_x;
-                            let dy = position.1 - prev_y;
-                            let scroll_x = -dx;
-                            let scroll_y = -dy;
-                            (scroll_x.abs() > 0.01 || scroll_y.abs() > 0.01)
-                                .then_some(event::MouseState::Scroll(scroll_x, scroll_y))
-                        })
-                    }
-                } {
-                    self.instance.emit(event::MouseEvent {
-                        position: Some(position),
-                        state,
-                        button: None,
-                    });
-                }
-                self.mouse = position;
-            }
-            Input::CursorMoved { position, .. } => {
-                let position = (self.logical(position.0 as f32), self.logical(position.1 as f32));
-                if self.mouse != position {
-                    self.mouse = position;
-                    self.instance.emit(event::MouseEvent {
-                        position: Some(position),
-                        state: event::MouseState::Moved,
-                        button: None,
-                    });
-                }
-            }
-            Input::Mouse { state, button, .. } => {
-                let btn = match button {
-                    MouseButton::Left => event::MouseButton::Left,
-                    MouseButton::Right => event::MouseButton::Right,
-                    MouseButton::Middle => event::MouseButton::Middle,
-                    _ => event::MouseButton::Left,
-                };
-                let ms = match state {
-                    ElementState::Pressed => event::MouseState::Pressed,
-                    ElementState::Released => event::MouseState::Released,
-                };
-                self.instance.emit(event::MouseButtonEvent {
-                    position: Some(self.mouse),
-                    state: ms,
-                    button: btn,
-                });
-                self.instance.emit(event::MouseEvent {
-                    position: Some(self.mouse),
-                    state: ms,
-                    button: Some(btn),
-                });
-            }
-            Input::MouseWheel { delta, phase, .. } => {
-                match delta {
-                    MouseScrollDelta::LineDelta(x, y) => {
-                        const LINE_UNITS: f32 = 3.0; 
-                        let shift = self.modifiers.shift;
-                        let (dx, dy) = if shift {
-                            (-y * LINE_UNITS, 0.0)
-                        } else {
-                            (-x * LINE_UNITS, -y * LINE_UNITS)
-                        };
-                        if dx.abs() > 0.001 || dy.abs() > 0.001 {
-                            self.emit_scroll(dx, dy);
-                        }
-                    }
-                    MouseScrollDelta::PixelDelta(p) => {
-                        match phase {
-                            TouchPhase::Started => {
-                                self.scroll = Some((0.0, 0.0));
-                                self.emit_scroll(0.0, 0.0);
-                            }
-                            TouchPhase::Moved => {
-                                let dx = -(p.x as f32);
-                                let dy = -(p.y as f32);
-                                if dx.abs() > 0.001 || dy.abs() > 0.001 {
-                                    self.emit_scroll(dx, dy);
-                                }
-                            }
-                            TouchPhase::Ended | TouchPhase::Cancelled => {
-                                self.scroll = None;
-                            }
-                        }
-                    }
-                }
-            }
-            Input::Keyboard { event, .. } => {
-                if let Some(key) = match event.logical_key {
-                    Key::Named(named) => match named {
-                        NamedKey::Enter => Some(event::NamedKey::Enter),
-                        NamedKey::Tab => Some(event::NamedKey::Tab),
-                        NamedKey::Space => Some(event::NamedKey::Space),
-                        NamedKey::ArrowDown => Some(event::NamedKey::ArrowDown),
-                        NamedKey::ArrowLeft => Some(event::NamedKey::ArrowLeft),
-                        NamedKey::ArrowRight => Some(event::NamedKey::ArrowRight),
-                        NamedKey::ArrowUp => Some(event::NamedKey::ArrowUp),
-                        NamedKey::Delete => Some(event::NamedKey::Delete),
-                        NamedKey::Shift => Some(event::NamedKey::Shift),
-                        NamedKey::Control => Some(event::NamedKey::Control),
-                        NamedKey::Alt => Some(event::NamedKey::Alt),
-                        NamedKey::Super 
-                        | NamedKey::Hyper 
-                        | NamedKey::Meta => Some(event::NamedKey::Meta),
-                        NamedKey::CapsLock => Some(event::NamedKey::CapsLock),
-                        NamedKey::NumLock => Some(event::NamedKey::NumLock),
-                        NamedKey::Backspace => Some(event::NamedKey::Backspace),
-                        NamedKey::Home => Some(event::NamedKey::Home),
-                        NamedKey::End => Some(event::NamedKey::End),
-                        NamedKey::ScrollLock => Some(event::NamedKey::ScrollLock),
-                        NamedKey::Escape => Some(event::NamedKey::Escape),
-                        _ => None,
-                    }.map(event::Key::Named),
-                    Key::Character(c) => Some(event::Key::Character(c.to_string())),
-                    Key::Unidentified(_) => None,
-                    Key::Dead(_) => None,
-                } {
-                    self.instance.emit(event::KeyboardEvent {
-                        key,
-                        state: match event.state {
-                            ElementState::Pressed if event.repeat => event::KeyboardState::Repeated,
-                            ElementState::Pressed => event::KeyboardState::Pressed,
-                            ElementState::Released => event::KeyboardState::Released,
-                        },
-                        modifiers: self.modifiers,
-                    });
-                }
-            }
+                }),
+                e => log::debug!("Ignored DeviceInputs: {e:?}")
+            },
             _ => {}
         }
     }
@@ -353,10 +191,12 @@ pub mod __private {
 
 #[macro_export]
 macro_rules! run {
-    ($($app:tt)*) => {
+    ([$($service:ident),*], $($app:tt)*) => {
         pub use $crate::__private::*;
         struct PrismBuilder;
         impl $crate::__private::Builder for PrismBuilder {
+            fn services() -> $crate::air::Services {$crate::air::Services::default()$( .add::<$service>() )*}
+
             fn build(ctx: &mut prism::Context) -> Box<dyn $crate::__private::Drawable> {
                 Box::new(({$($app)*})(ctx))
             }

@@ -17,3 +17,4 @@ prism = {package = 'prism2', path = "../prism"}
 #wgpu_canvas = "5.0.6"
 wgpu_canvas = {path = "../wgpu_canvas"}
 air = {path = "../air"}
+log = "0.4.33"
