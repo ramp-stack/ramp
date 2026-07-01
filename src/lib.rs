@@ -133,7 +133,6 @@ impl<B: Builder> Application for Ramp<B> {
                     Key::Escape => event::Key::Escape,
                     Key::Enter => event::Key::Enter,
                     Key::Tab => event::Key::Tab,
-                    Key::Space => event::Key::Space,
                     Key::Up => event::Key::Up,
                     Key::Down => event::Key::Down,
                     Key::Left => event::Key::Left,
@@ -191,11 +190,11 @@ pub mod __private {
 
 #[macro_export]
 macro_rules! run {
-    ([$($service:ident),*], $($app:tt)*) => {
+    ([$($($service:tt)*),*], $($app:tt)*) => {
         pub use $crate::__private::*;
         struct PrismBuilder;
         impl $crate::__private::Builder for PrismBuilder {
-            fn services() -> $crate::air::Services {$crate::air::Services::default()$( .add::<$service>() )*}
+            fn services() -> $crate::air::Services {$crate::air::Services::default()$( .add::<$($service)*>() )*}
 
             fn build(ctx: &mut prism::Context) -> Box<dyn $crate::__private::Drawable> {
                 Box::new(({$($app)*})(ctx))
