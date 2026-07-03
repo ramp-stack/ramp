@@ -7,27 +7,37 @@ use prism::layout::{Column, Stack, Row, Padding, ScrollAnchor, Size, Offset};
 use ramp::air;
 use prism::event::{OnEvent, Event, KeyboardEvent, Key, KeyboardState, TickEvent};
 
-use air::{Contract, Reactants, Reactant, Instance, Name, Service, Services, Metadata, Secret, Lock, names::Id};
+use air::{Contract, Reactants, Reactant, Instance, Name, Service, Services, Metadata, Secret, Lock, names::Id, Instances};
 
 use serde::{Serialize, Deserialize};
 
-#[derive(Default)]
-pub struct ChatBot;
+pub struct ChatBot(Instances);
 impl Service for ChatBot {
     fn id() -> Id {Id::hash("CHATBOT")}
-    async fn new(_ctx: &mut air::Context, _secret: Secret) -> Self {ChatBot}
+    async fn new(ctx: &mut air::Context, _secret: Secret) -> Self {ChatBot(ctx.instances())}
     async fn run(&mut self, ctx: &mut air::Context) {
         let mut join_set = tokio::task::JoinSet::new();
+        ///Include a never completing future to the join_set so its never empty
         loop { tokio::select!{
-            mut room = ctx.listen::<Room>() => {
-                join_set.spawn(async {(room.listen_confirmed::<SendMessage>().await, room)});
+            instance = self.0.listen() => {
+                if let Some(mut room) = instance.downcast::<Room>() {
+                    join_set.spawn(async {loop {
+                        if let Some(message) = room.listen_confirmed().await.downcast::<SendMessage>() {
+                            break (message, room);
+                        }
+                    }});
+                }
             },
             Some(Ok((index, mut room))) = join_set.join_next() => {
-                let message = room.confirmed().unwrap().messages.get(index).unwrap().clone();
+                let message = room.confirmed().messages.get(index).unwrap().clone();
                 if message.author == ctx.me() && !message.body.contains("ChatBot") {
                     room.apply(SendMessage(format!("ChatBot Replying to \"{:.10}...\": I totally agree", message.body)));
                 }
-                join_set.spawn(async {(room.listen_confirmed::<SendMessage>().await, room)});
+                join_set.spawn(async {loop {
+                    if let Some(message) = room.listen_confirmed().await.downcast::<SendMessage>() {
+                        break (message, room);
+                    }
+                }});
             }
         }}
     }
@@ -72,11 +82,11 @@ impl Contract for Room {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SendMessage(String);
 impl Reactant<Room> for SendMessage {
-    type Result = usize;
+    type Output = usize;
 
     fn id() -> Id {Id::hash("SendMessage")}
 
-    fn apply(self, room: &mut Room, metadata: Metadata) -> Self::Result {
+    fn apply(self, room: &mut Room, metadata: Metadata) -> Self::Output {
         room.messages.push(Message{author: metadata.signer, timestamp: metadata.timestamp, body: self.0});
         room.messages.len()-1
     }
