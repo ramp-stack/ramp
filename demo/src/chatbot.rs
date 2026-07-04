@@ -10,39 +10,40 @@ use prism::event::{OnEvent, Event, KeyboardEvent, Key, KeyboardState, TickEvent}
 use air::{Contract, Reactants, Reactant, Instance, Name, Service, Services, Metadata, Secret, Lock, names::Id, Instances};
 
 use serde::{Serialize, Deserialize};
+use tokio::task::JoinSet;
 
-pub struct ChatBot(Instances);
+use std::collections::HashMap;
+use futures::stream::{FuturesUnordered, StreamExt};
+
+pub struct ChatBot(HashMap<Id, Instance<Room>>, Instances<Room>);
 impl Service for ChatBot {
     fn id() -> Id {Id::hash("CHATBOT")}
-    async fn new(ctx: &mut air::Context, _secret: Secret) -> Self {ChatBot(ctx.instances())}
+    async fn new(ctx: &mut air::Context, _secret: Secret) -> Self {
+        let instances = ctx.instances();
+        ChatBot(instances.list(), instances)
+    }
     async fn run(&mut self, ctx: &mut air::Context) {
-        let mut join_set = tokio::task::JoinSet::new();
-        ///Include a never completing future to the join_set so its never empty
-        loop { tokio::select!{
-            instance = self.0.listen() => {
-                if let Some(mut room) = instance.downcast::<Room>() {
-                    join_set.spawn(async {loop {
-                        if let Some(message) = room.listen_confirmed().await.downcast::<SendMessage>() {
-                            break (message, room);
-                        }
-                    }});
-                }
-            },
-            Some(Ok((index, mut room))) = join_set.join_next() => {
-                let message = room.confirmed().messages.get(index).unwrap().clone();
-                if message.author == ctx.me() && !message.body.contains("ChatBot") {
-                    room.apply(SendMessage(format!("ChatBot Replying to \"{:.10}...\": I totally agree", message.body)));
-                }
-                join_set.spawn(async {loop {
-                    if let Some(message) = room.listen_confirmed().await.downcast::<SendMessage>() {
-                        break (message, room);
+        loop { 
+            let mut set = self.0.values_mut().map(|r| async {
+                loop {
+                    if let Some(index) = r.listen_confirmed().await.downcast::<SendMessage>() {
+                        break (index, r)
                     }
-                }});
+                }
+            }).collect::<FuturesUnordered<_>>();
+            tokio::select!{
+                instance = self.1.listen() => {drop(set); self.0.insert(instance.id(), instance);},
+                Some((index, room)) = set.next() => {
+                    let message = room.load_confirmed().messages.get(index).unwrap().clone();
+                    if message.author == ctx.me() && !message.body.contains("ChatBot") {
+                        room.apply(SendMessage(format!("ChatBot Replying to \"{:.10}...\": I totally agree", message.body)));
+                    }
+                }
             }
-        }}
+        }
     }
     async fn shutdown(self, ctx: &mut air::Context) {
-        for mut room in ctx.list::<Room>() {
+        for room in self.1.list().values_mut() {
             room.apply(SendMessage("ChatBot Shutting Down".to_string())).confirmed().await;
         }
         println!("CHATBOT SHUTDOWN");
@@ -162,12 +163,11 @@ pub struct Messages(
 impl OnEvent for Messages {
     fn on_event(&mut self, ctx: &mut Context, sized: &SizedTree, event: Box<dyn Event>) -> Vec<Box<dyn Event>> {
         if let Some(KeyboardEvent{key: Key::Enter, state: KeyboardState::Pressed, ..}) = event.downcast_ref() {
-            println!("Sending");
             self.3.apply(SendMessage(self.2.2.2.spans[0].text.clone()));
         }
         if let Some(TickEvent) = event.downcast_ref() {
             if self.3.pending_updated() {
-                self.2.1 = self.3.pending().messages.iter().map(|message|
+                self.2.1 = self.3.load_pending().messages.iter().map(|message|
                     MessageItem(
                         Stack::start(),
                         Shape{shape: ShapeType::Rectangle(0.0, (500.0, 20.0), 0.0), color: Color::BLACK},
@@ -209,7 +209,7 @@ impl OnEvent for App {}
 impl App {
     pub fn new(ctx: &mut Context) -> Self {
         let font = Font::from_bytes(include_bytes!("../resources/font.ttf")).unwrap();
-        let room = ctx.create("Default".to_string());
+        let room = ctx.instances().create("Default".to_string());
         App(Column::center(24.0),
             Text::new("ChatBot", font.clone(), 32.0, Color::WHITE, Align::Center),
             Content(Row::start(10.0), Rooms::new(font.clone(), vec!["Default".to_string()]), Messages::new(room, font))
