@@ -79,8 +79,8 @@ impl Erased {
             match serde_json::from_slice::<T>(b).map(|e| e.eval(p, n, t, c)) {
                 Ok(Ok(())) => {},
                 Ok(Err(EventError::Beaker(b))) => panic!("Beaker Error: {b:?}"),
-                Ok(Err(EventError::Event(e))) => log::error!("{:?}", e),
-                Err(s) => log::warn!("Bad Event: {s:?}")
+                Ok(Err(EventError::Event(e))) => {} // log::error!("{:?}", e),
+                Err(s) => {} //log::warn!("Bad Event: {s:?}")
             }
         ), TypeId::of::<T>(), std::any::type_name::<T>().to_string())
     }

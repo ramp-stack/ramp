@@ -176,7 +176,7 @@ impl<B: Builder> Application for Ramp<B> {
                         MouseState::Scroll(dx, dy) => event::MouseState::Scroll(dx, dy),
                     }
                 }),
-                e => log::debug!("Ignored DeviceInputs: {e:?}")
+                e => {} // log::debug!("Ignored DeviceInputs: {e:?}")
             },
             _ => {}
         }
@@ -190,7 +190,7 @@ pub mod __private {
 
 #[macro_export]
 macro_rules! run {
-    ([$($($service:tt)*),*], $($app:tt)*) => {
+    ([$($service:ty),* $(,)?], $($app:tt)*) => {
         pub use $crate::__private::*;
         struct PrismBuilder;
         impl $crate::__private::Builder for PrismBuilder {
