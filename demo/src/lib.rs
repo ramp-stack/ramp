@@ -9,10 +9,10 @@ use prism::event::{OnEvent, Event, KeyboardEvent, Key, KeyboardState};
 use prism::display::Enum;
 
 mod hardware;
-mod chatbot;
+//mod chatbot;
 //mod wallet;
 
-#[derive(Component, Debug, Clone)]
+#[derive(Component, Debug)]
 pub struct App(
     Column,
     Text,
@@ -20,6 +20,10 @@ pub struct App(
     #[skip] Vec<String>,
     #[skip] usize
 );
+impl OnEvent<KeyboardEvent> {
+
+}
+
 impl OnEvent for App {
     fn on_event(&mut self, ctx: &mut Context, sized: &SizedTree, event: Box<dyn Event>) -> Vec<Box<dyn Event>> {
         if let Some(KeyboardEvent{key: Key::Left | Key::Right, state: KeyboardState::Pressed, ..}) = event.downcast_ref() {
@@ -31,12 +35,15 @@ impl OnEvent for App {
 
 }
 
-ramp::run!([chatbot::ChatBot], |ctx: &mut Context| {
+ramp::run!([], |ctx: &mut Context| {
     let font = Font::from_bytes(include_bytes!("../resources/font.ttf")).unwrap();
     App(Column::center(24.0),
         Text::new("Hello use arrows to switch apps!", font, 32.0, Color::WHITE, Align::Center),
-        Enum::new(vec![("hardware".to_string(), Box::new(hardware::App::new())), ("chat".to_string(), Box::new(chatbot::App::new(ctx)))], "hardware".to_string()),
-        vec!["hardware".to_string(), "chat".to_string()],
+        Enum::new(vec![
+            ("hardware".to_string(), Box::new(hardware::App::new())),
+            //("chat".to_string(), Box::new(chatbot::App::new(ctx)))
+        ], "hardware".to_string()),
+        vec!["hardware".to_string()],
         0
     )
 });

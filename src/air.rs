@@ -1,336 +1,428 @@
-
-
-
-
-
-pub struct Beaker(Offset<Value>);
-impl substance::Beaker for Beaker {
-    fn query<P: AsRef<Path>>(&self, path: P) -> Result<Substance, PathBuf> {self.0.query(path).unwrap()}
-
-    fn insert<P: AsRef<Path>>(&mut self, path: P, value: Substance) -> Result<(), PathBuf> {self.0.insert(path, value).unwrap()}
-}
-
-
-
-
-
-
-
-
-
-
-use air::names::{Id, Secret, Name, Signed, Resolver};
-use air::names::secp256k1::{SecretKey};
-use air::{Purser, Request, Response, Channel};
-
-use std::collections::BTreeMap;
-use std::path::{PathBuf, Path};
-use std::hash::Hash;
-use std::ops::Deref;
+use air::{Contract, DefaultResolver, Id, Inbox, Location, Name, Output, Request, RequestType};
+use air::{Resolver, Response, Secret};
+use air_server::Client;
+use arc_swap::ArcSwap;
+use crossfire::{AsyncRx, spsc};
+use futures::{StreamExt, stream::FuturesUnordered};
+use maverick_os::shared::{Ref, Service, Services, Sharable, Shared};
+use prism::traits::{self, Update};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::{HashMap, VecDeque};
+use std::fmt::Debug;
+use std::future::Future;
+use std::hash::{Hash, Hasher};
 use std::pin::Pin;
-use std::any::TypeId;
-use std::sync::Arc;
-use std::str::FromStr;
+use std::sync::{Arc, LazyLock, Mutex as ResponseMutex};
+use std::time::Duration;
+use tokio::sync::{Mutex, OnceCell, broadcast};
 
-use serde::{Serialize, Deserialize};
-use rusqlite::Connection;
-use substance::{Value, Primitive, into, from, Offset};
+#[derive(Clone, Debug)]
+pub struct Air {secret: Secret}
+impl Air {
+    pub fn new(secret: Secret) -> Self {
+        Services::start::<InboxService>(secret.clone());
+        Self {secret}
+    }
+}
+impl traits::Air for Air {
+    type Instance<C: Contract> = Instance<C>;
+    type Instances<C: Contract> = Instances<C>;
 
-use crossfire::{Tx, Rx, spsc::{Array, bounded_blocking}};
-use triple_buffer::{Input, Output};
-use tokio::time::{interval, Duration};
+    fn instances<C: Contract>(&self) -> Instances<C> {
+        let instances = Shared::new(self.secret.clone());
+        Services::start::<InstancesService<C>>(self.secret.clone());
+        Instances(instances)
+    }
+    fn me(&self) -> Name {self.secret.name()}
+}
 
-pub struct Beaker(Offset<Value>);
-impl substance::Beaker for Beaker {
-    fn query<P: AsRef<Path>>(&self, path: P) -> Result<Substance, PathBuf> {self.0.query(path).unwrap()}
+#[derive(Clone, Debug)]
+pub struct Instances<C: Contract>(Shared<InstancesState<C>>);
+impl<C: Contract> traits::Instances<C> for Instances<C> {
+    type Instance = Instance<C>;
 
-    fn insert<P: AsRef<Path>>(&mut self, path: P, value: Substance) -> Result<(), PathBuf> {self.0.insert(path, value).unwrap()}
+    fn create(&self, init: C::Init) -> Instance<C> {self.0.update(InstancesRequest::Create(init))}
+    fn list(&self) -> HashMap<Id, Instance<C>> {self.0.load().0.clone()}
+    fn try_next(&mut self) -> Option<Instance<C>> {self.0.try_next()}
+    async fn next(&mut self) -> Instance<C> {self.0.next().await}
+}
+
+#[derive(Clone, Debug)]
+pub struct Instance<C: Contract>(Shared<InstanceState<C>>, Shared<InboxState>);
+impl<C: Contract> traits::Instance<C> for Instance<C> {
+    type Pending = Pending<C::Result>;
+    type Ref<'a> = Ref<'a, C>;
+
+    fn send(&mut self, message: C::Message) -> Self::Pending {
+        match self.0.update(InstanceRequest::Send(message)).0 {
+            Some(Update::Pending(pending)) => pending,
+            _ => unreachable!("Sending a message must produce its pending result"),
+        }
+    }
+    fn share(&self, name: Name) {
+        let location = *self.0.clone().load().0.location();
+        self.1.update(InboxRequest::Share(name, location));
+    }
+    fn pending(&self) -> Ref<'_, C> {self.0.load().map(|state| state.0.pending().unwrap())}
+    fn confirmed(&self) -> Option<Ref<'_, C>> {
+        let state = self.0.load();
+        state.0.confirmed().is_some().then(|| state.map(|state| state.0.confirmed().unwrap()))
+    }
+    fn try_next(&mut self) -> Option<Update<Self::Pending, C::Result>> {
+        loop {if let Some(update) = self.0.try_next()?.0 {return Some(update)}}
+    }
+    async fn next(&mut self) -> Update<Self::Pending, C::Result> {
+        loop {if let Some(update) = self.0.next().await.0 {return update}}
+    }
 }
 
 #[derive(Debug)]
-pub enum EventError<B, E> { Beaker(B), Event(E) }
-impl<B: std::error::Error, E: std::error::Error> std::error::Error for EventError<B, E> {}
-impl<B: std::error::Error, E: std::error::Error> std::fmt::Display for EventError<B, E> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {write!(f, "{:?}", self)}
+pub struct Pending<R: Clone + Debug + Send + Sync + 'static> {
+    value: Arc<ArcSwap<(R, bool)>>,
+    sender: broadcast::Sender<bool>,
+    responses: ResponseMutex<broadcast::Receiver<bool>>,
 }
-impl<B: std::error::Error, E: std::error::Error> From<B> for EventError<B, E> {fn from(error: B) -> Self {Self::Beaker(error)}}
-
-#[derive(Debug)]
-pub enum Error<E> {
-    InvalidEvent,
-    ManagerClosed,
-    Event(E),
-}
-impl<E: std::error::Error> std::error::Error for Error<E> {}
-impl<E: std::error::Error> std::fmt::Display for Error<E> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {write!(f, "{:?}", self)}
-}
-impl<E: std::error::Error> From<E> for Error<E> {fn from(error: E) -> Self {Self::Event(error)}}
-
-
-pub type Events = Vec<Erased>;
-
-type Func = Box<dyn Fn(&[u8], &Path, Name, u64, &mut Offset<Value>) + Send + Sync>;
-
-pub struct Erased(Func, TypeId, String);
-impl Erased {
-    pub fn new<T: Event + 'static>() -> Self {
-        Erased(Box::new(|b: &[u8], p: &Path, n: Name, t: u64, c: &mut Offset<Value>|
-            match serde_json::from_slice::<T>(b).map(|e| e.eval(p, n, t, c)) {
-                Ok(Ok(())) => {},
-                Ok(Err(EventError::Beaker(b))) => panic!("Beaker Error: {b:?}"),
-                Ok(Err(EventError::Event(e))) => {} // log::error!("{:?}", e),
-                Err(s) => {} //log::warn!("Bad Event: {s:?}")
-            }
-        ), TypeId::of::<T>(), std::any::type_name::<T>().to_string())
+impl<R: Clone + Debug + Send + Sync + 'static> Pending<R> {
+    fn update(&self, result: R, confirmed: bool) {
+        self.value.store(Arc::new((result, confirmed)));
+        let _ = self.sender.send(confirmed);
     }
 }
-impl std::fmt::Debug for Erased {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {write!(f, "Erased({})", self.2)}
-}
-
-pub trait Reactant: Serialize + for<'a> Deserialize<'a> {
-    type Error: std::error::Error;
-    ///Eval is transactional, Emitting an error rolls the entire event back, It is recommended to
-    ///handle validation as early as possible to avoid unecessary computation to discover the event
-    ///is invalid.
-    ///
-    ///Error::Substance Errors are logged when emitted and the event rolled back and ignored,
-    ///Error::Event Errors are handled the same when receiving them but will pass the error onto the sender
-    fn apply(self, path: &Path, signer: Name, timestamp: u64, beaker: &mut Beaker) -> Result<(), Self::Error>;
-}
-
-type Routes = Box<dyn Fn() -> BTreeMap<PathBuf, Vec<Erased>>>;
-pub trait Contract: Hash {
-    fn id() -> Id;
-
-    fn init(self) -> Value;
-
-    fn routes() -> BTreeMap<PathBuf, Vec<Erased>>;
-}
-
-#[derive(Default, Debug)]
-pub struct Contracts(BTreeMap<Id, (TypeId, BTreeMap<PathBuf, Vec<Erased>>)>);
-impl Contracts {
-    pub fn new() -> Self {Contracts(BTreeMap::new())}
-    pub fn add<C: Contract + 'static>(mut self) -> Self {
-        self.0.insert(C::id(), (TypeId::of::<C>(), C::routes()));
-        self
+impl<R: Clone + Debug + Send + Sync + 'static> Clone for Pending<R> {
+    fn clone(&self) -> Self {
+        Self {
+            value: self.value.clone(), sender: self.sender.clone(),
+            responses: ResponseMutex::new(self.sender.subscribe()),
+        }
     }
 }
+impl<R: Clone + Debug + Send + Sync + 'static> traits::Pending<R> for Pending<R> {
+    type Ref<'a> = Ref<'a, R>;
 
-//  #[derive(Clone, Debug)]
-//  pub struct Instance(Id, TypeId, Id, PathBuf);
-//  impl Instance {pub fn new(contract: Id, ty_id: TypeId, channel: Id) -> Self {Instance(contract, ty_id, channel, PathBuf::from(format!("{contract}/{channel}")))}}
-//  impl Deref for Instance { type Target = Id; fn deref(&self) -> &Id {&self.2} }
-//  impl AsRef<Path> for Instance {fn as_ref(&self) -> &Path {&self.3}}
-
-#[derive(Debug)]
-pub struct Remote {
-    output: Output<Value>,
-    tx: Tx<Array<_Request>>,
-}
-impl Deref for Remote {
-    type Target = Value;
-    fn deref(&self) -> &Value {self.output.output_buffer()}
-}
-
-impl Remote {
-    pub fn new<B: Beaker + Send + 'static>(beaker: B, secret: Secret, mut contracts: Contracts) -> Result<Self, B::Error> {
-        let value = beaker.query("values")?.unwrap_or(Value::Map(contracts.0.keys().map(|id| (id.to_string(), Value::map())).collect()));
-        let (mut input, output) = triple_buffer::triple_buffer(&value);
-
-        let (tx, mut rx) = bounded_blocking(100);
-        let mut channels = beaker.query("channels")?.ok().and_then(|f| from(f).ok()).unwrap_or(
-            Channels(Channel::from(secret.derive(&[Id::hash("$channel")]).unwrap().harden()), BTreeMap::new(), 0)
-        );
-
-        let mut task = Task{beaker, secret, channels, contracts, input, value, rx};
-        tokio::task::spawn(async move {task.run().await.unwrap()});
-
-        Ok(Remote{output, tx})
+    fn pending(&self) -> Ref<'_, R> {
+        *self.responses.lock().unwrap() = self.sender.subscribe();
+        Ref::new(self.value.as_ref().load()).map(|state| &state.0)
     }
-
-    ///Will return None if the manager is closed
-    pub fn create<C: Contract>(&mut self, contract: C) -> Option<PathBuf> {
-        let channel = Channel::default();
-        let channel_id = channel.id();
-        let c_id = C::id();
-        self.tx.send(_Request::New(c_id, channel, contract.init())).ok()?;
-        Some(PathBuf::from(format!("{c_id}/{channel_id}")))
+    fn try_confirmed(&self) -> Option<R> {
+        *self.responses.lock().unwrap() = self.sender.subscribe();
+        let state = self.value.as_ref().load();
+        state.1.then(|| state.0.clone())
     }
-
-    pub fn send<P: AsRef<Path>, E: Event + 'static>(&self, path: P, event: E) -> Result<(), Error<E::Error>> {
-        //TODO: Optionally Attempt to eval Event and return any possible error prior to sending it
-        let ty_id = TypeId::of::<E>();
-        let mut components = path.as_ref().components();
-        let id = components.next().and_then(|id| Id::from_str(&id.as_os_str().to_string_lossy()).ok()).ok_or(Error::InvalidEvent)?;
-        let iid = components.next().and_then(|id| Id::from_str(&id.as_os_str().to_string_lossy()).ok()).ok_or(Error::InvalidEvent)?;
-        let path = components.as_path().to_path_buf();
-
-        self.tx.send(_Request::Send(id, iid, path, ty_id, serde_json::to_vec(&event).unwrap())).map_err(|_| Error::ManagerClosed)?;
-        Ok(())
-    }
-
-    pub fn share(&self, id: Id, name: Name) {}
-}
-
-#[derive(Serialize, Deserialize)]
-struct Channels(Channel, BTreeMap<Id, (Channel, BTreeMap<Id, Channel>)>, u64);
-enum _Request {New(Id, Channel, Value), Share(Id, Id, Name), Send(Id, Id, PathBuf, TypeId, Vec<u8>)}
-
-struct Task<B> {
-    beaker: B,
-    secret: Secret,
-    channels: Channels,
-    contracts: Contracts,
-    input: Input<Value>,
-    value: Value,
-    rx: Rx<Array<_Request>>
-}
-
-impl<B: Beaker> Task<B> {
-    ///I can turn this into a run function that responsds to channel results and incomming requests
-    ///and poll the channels as fast as possible?
-    pub async fn run(&mut self) -> Result<(), B::Error> {
+    async fn confirmed(mut self) -> R {
         loop {
-            let mut pending_events: BTreeMap<(Id, Id), BTreeMap<u64, Signed<Vec<u8>>>> = BTreeMap::new();
-            let mut pending_instances: BTreeMap<Id, BTreeMap<u64, Signed<Vec<u8>>>> = BTreeMap::new();
-            //1. Scan Missives
-            if let Response::Inbox(missives) = Purser::send(&mut Resolver, &Name::orange_me(), Request::Receive(Signed::new(&self.secret, self.channels.2).unwrap())).await.unwrap() {
-                for (m, data) in missives {
-                    self.channels.2 = self.channels.2.max(m.as_ref().timestamp);
-                    if let Ok((id, key)) = serde_json::from_slice::<(Id, SecretKey)>(&data)
-                    && let Some((_, instances)) = self.channels.1.get_mut(&id) {
-                        let channel = Channel::from(key);
-                        instances.insert(channel.id(), channel);
+            if let Some(result) = self.try_confirmed() {return result}
+            self.next().await;
+        }
+    }
+    fn try_next(&mut self) -> Option<bool> {
+        match self.responses.get_mut().unwrap().try_recv() {
+            Ok(confirmed) => Some(confirmed),
+            Err(broadcast::error::TryRecvError::Empty) => None,
+            Err(error) => panic!("{error}"),
+        }
+    }
+    async fn next(&mut self) -> bool {self.responses.get_mut().unwrap().recv().await.unwrap()}
+}
+
+
+type InstanceResponse<R> = (
+    Option<Update<Pending<R>, R>>, Option<Request>, Vec<(Pending<R>, R, bool)>,
+);
+type InboxResponse = (Option<Location>, HashMap<RequestType, Request>);
+type Predicate<'a, P> = Pin<Box<dyn Future<Output = P> + Send + 'a>>;
+
+static NETWORK: LazyLock<Network> = LazyLock::new(Network::default);
+
+enum InstancesRequest<C: Contract> {Create(C::Init), Received(Instance<C>)}
+enum InstancesPredicate {Received(Location), Initialized(Id)}
+enum InstanceRequest<C: Contract> {
+    Start, Request, Initialize(Secret, C::Init), Send(C::Message), Response(Response),
+}
+enum InstancePredicate {Response(Response), Changed}
+enum InboxRequest {Start, Requests, Response(RequestType, Response), Share(Name, Location)}
+enum InboxPredicate {Response(RequestType, Response), Changed}
+
+#[derive(Clone)]
+struct InstanceInit<I> {secret: Secret, location: Location, init: Option<I>}
+impl<I> Hash for InstanceInit<I> {
+    fn hash<H: Hasher>(&self, hasher: &mut H) {
+        self.secret.hash(hasher);
+        self.location.hash(hasher);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct InboxState(Inbox, Name);
+impl Sharable for InboxState {
+    type Init = Secret;
+    type Request = InboxRequest;
+    type Response = InboxResponse;
+
+    async fn init(secret: Secret) -> Self {
+        let name = secret.name();
+        Self(Inbox::new(secret).expect("Could not create the Air inbox"), name)
+    }
+    async fn handle(&mut self, request: InboxRequest) -> InboxResponse {
+        let location = match request {
+            InboxRequest::Start => return (None, self.0.start()),
+            InboxRequest::Requests => return (None, self.0.requests()),
+            InboxRequest::Response(kind, response) => {
+                self.0.response(&mut *NETWORK.resolver.lock().await, kind, response).await.map(|(_, l)| l)
+            }
+            InboxRequest::Share(name, location) => {
+                let sent = self.0.send(&mut *NETWORK.resolver.lock().await, name, location).await;
+                (sent && name == self.1).then_some(location)
+            }
+        };
+        (location, HashMap::new())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(bound = "C: Contract")]
+struct InstancesState<C: Contract>(#[serde(skip)] HashMap<Id, Instance<C>>, Secret);
+impl<C: Contract> Sharable for InstancesState<C> {
+    type Init = Secret;
+    type Request = InstancesRequest<C>;
+    type Response = Instance<C>;
+
+    async fn init(secret: Secret) -> Self {Self(HashMap::new(), secret)}
+    async fn handle(&mut self, request: Self::Request) -> Instance<C> {
+        match request {
+            InstancesRequest::Create(init) => {
+                let location = air::Instance::<C>::generate_location(&self.1, &init)
+                    .expect("Could not create the Air instance location");
+                self.0.entry(Id::hash(&location)).or_insert_with(|| {
+                    let data = InstanceInit {secret: self.1.clone(), location, init: Some(init.clone())};
+                    let instance = Instance(Shared::new(data.clone()), Shared::new(self.1.clone()));
+                    instance.0.update(InstanceRequest::Initialize(self.1.clone(), init));
+                    Services::start::<InstanceService<C>>(data);
+                    instance.1.update(InboxRequest::Share(self.1.name(), location));
+                    instance
+                }).clone()
+            }
+            InstancesRequest::Received(instance) => {
+                let id = instance.0.load().0.id();
+                self.0.entry(id).or_insert(instance).clone()
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct InstanceState<C: Contract>(air::Instance<C>, VecDeque<Option<Pending<C::Result>>>);
+impl<C: Contract> Serialize for InstanceState<C> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        (&self.0, self.1.len()).serialize(serializer)
+    }
+}
+impl<'de, C: Contract> Deserialize<'de> for InstanceState<C> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let (instance, pending): (air::Instance<C>, usize) = Deserialize::deserialize(deserializer)?;
+        Ok(Self(instance, (0..pending).map(|_| None).collect()))
+    }
+}
+impl<C: Contract> Sharable for InstanceState<C> {
+    type Init = InstanceInit<C::Init>;
+    type Request = InstanceRequest<C>;
+    type Response = InstanceResponse<C::Result>;
+
+    async fn init(init: Self::Init) -> Self {
+        let instance = match init.init {
+            Some(value) => air::Instance::new(init.secret, value),
+            None => air::Instance::receive(init.secret, init.location),
+        }.expect("Could not open the Air instance");
+        Self(instance, VecDeque::new())
+    }
+    async fn handle(&mut self, request: Self::Request) -> Self::Response {
+        let mut notifications = vec![];
+        let update = match request {
+            InstanceRequest::Start => return (None, Some(self.0.start()), vec![]),
+            InstanceRequest::Request => return (None, self.0.request(), vec![]),
+            InstanceRequest::Initialize(secret, init) => {
+                if self.0.pending().is_none() {
+                    self.0 = air::Instance::new(secret, init).expect("Could not initialize the Air instance");
+                }
+                return (None, None, vec![])
+            }
+            InstanceRequest::Send(message) => {
+                let result = self.0.send(message);
+                let (sender, responses) = broadcast::channel(1024);
+                let pending = Pending {
+                    value: Arc::new(ArcSwap::from_pointee((result, false))), sender,
+                    responses: ResponseMutex::new(responses),
+                };
+                self.1.push_back(Some(pending.clone()));
+                Update::Pending(pending)
+            }
+            InstanceRequest::Response(response) => {
+                let (results, update) = match self.0
+                    .response(&mut *NETWORK.resolver.lock().await, response).await {
+                    Output::Init(results) => (results, Update::Init),
+                    Output::Created(result, results) => {
+                        if let Some(Some(pending)) = self.1.pop_front() {
+                            notifications.push((pending, result.clone(), true));
+                        }
+                        (results, Update::Confirmed(result))
+                    }
+                    Output::Read(result, results) => (results, Update::Confirmed(result)),
+                    Output::Subscribed | Output::Garbage => return (None, None, vec![]),
+                };
+                for (result, pending) in results.into_iter().zip(&self.1) {
+                    if let Some(pending) = pending {
+                        notifications.push((pending.clone(), result, false));
                     }
                 }
+                update
             }
-            //2. Handle Inputs
-            while let Ok(request) = self.rx.try_recv() {match request {
-                _Request::New(id, channel, init) => {
-                    let (contract_channel, instances) = self.channels.1.get_mut(&id).unwrap();
-                    let results = contract_channel.send_all(Some(Signed::new(&self.secret, serde_json::to_vec(&channel).unwrap()).unwrap())).await.unwrap();
-                    pending_instances.entry(id).or_default().extend(results);
-                },
-                _Request::Share(id, iid, name) => {
-                    let (contract_channel, instances) = self.channels.1.get_mut(&id).unwrap();
-                    let instance = instances.get_mut(&iid).unwrap();
-                    Purser::send(&mut Resolver, &Name::orange_me(), Request::Send(name, serde_json::to_vec(&(id, instance.key)).unwrap())).await.unwrap();
-                },
-                _Request::Send(id, iid, path, ty_id, event) => {
-                    let (contract_channel, instances) = self.channels.1.get_mut(&id).unwrap();
-                    let instance = instances.get_mut(&iid).unwrap();
+        };
+        (Some(update), None, notifications)
+    }
+}
 
-                    let (index, _) = self.contracts.0.get(&id).unwrap().1.get(&path).unwrap().iter().enumerate().find(|(i, e)| e.1 == ty_id).unwrap();
-                    let results = instance.send_all(Some(Signed::new(&self.secret, serde_json::to_vec(&(path, index, event)).unwrap()).unwrap())).await.unwrap();
-                    pending_events.entry((id, iid)).or_default().extend(results);
+struct InstancesService<C: Contract> {
+    inbox: Shared<InboxState>,
+    instances: Shared<InstancesState<C>>,
+    pending: HashMap<Id, Shared<InstanceState<C>>>,
+    secret: Secret,
+}
+impl<C: Contract> Service for InstancesService<C> {
+    type Init = Secret;
+    type Predicate = InstancesPredicate;
+
+    async fn init(secret: Secret) -> Self {
+        let inbox: Shared<InboxState> = Shared::new(secret.clone());
+        let instances: Shared<InstancesState<C>> = Shared::new(secret.clone());
+        let locations = inbox.load().0.list(&C::id());
+        let mut service = Self {inbox, instances, pending: HashMap::new(), secret};
+        for location in locations {service.handle(InstancesPredicate::Received(location)).await;}
+        service
+    }
+    async fn predicate(&mut self) -> InstancesPredicate {
+        let mut predicates: FuturesUnordered<Predicate<'_, InstancesPredicate>> = self.pending
+            .iter_mut().map(|(id, instance)| Box::pin(async move {
+                loop {
+                    if instance.load().0.pending().is_some() {
+                        return InstancesPredicate::Initialized(*id)
+                    }
+                    instance.next().await;
                 }
-            }}
-            
-
-            //3. Scan for new instances, events
-            for (id, (channel, instances)) in &mut self.channels.1 {
-                let results = channel.send_all(None).await.unwrap();
-                pending_instances.entry(*id).or_default().extend(results);
-
-                instances.extend(pending_instances.remove(id).unwrap().into_values().flat_map(|signed| {
-                    let me = signed.signer() == self.secret.name();
-                    serde_json::from_slice::<Channel>(&signed.into_inner()).ok().filter(|_| me).map(|c| (c.id(), c))
-                }));
-
-                for (iid, instance) in instances {
-                    let results = instance.send_all(None).await.unwrap();
-                    pending_events.entry((*id, *iid)).or_default().extend(results);
-
-                    pending_events.remove(&(*id, *iid)).unwrap().into_iter().for_each(|(t, signed)| {
-                        let signer = signed.signer();
-                        if let Ok((path, index, event)) = serde_json::from_slice(&signed.into_inner()) {
-                            let mut offset = Offset::new(&mut self.value, PathBuf::from(&format!("{id}/{iid}")));
-                            if let Some(erased) = self.contracts.0.get(id).unwrap().1.get(path).and_then(|e| e.get::<usize>(index)) {
-                                let erased: &Erased = erased;
-                                (*erased.0)(event, path, signer, t, &mut offset)
-                            }
-                        }
-                    });
-
+            }) as Predicate<'_, InstancesPredicate>).collect();
+        predicates.push(Box::pin(async {
+            loop {
+                if let Some(location) = self.inbox.next().await.0 {
+                    if location.contract == C::id() {return InstancesPredicate::Received(location)}
                 }
             }
-
-            //TODO: These need to happen in the same atomic transaction
-            self.input.write(self.value.clone());
-            self.beaker.insert("value", into(&self.value).unwrap())?.unwrap();
-            self.beaker.insert("channels", into(&self.channels).unwrap())?.unwrap();
+        }));
+        predicates.next().await.unwrap()
+    }
+    async fn handle(&mut self, predicate: InstancesPredicate) {
+        match predicate {
+            InstancesPredicate::Received(location) => {
+                let id = Id::hash(&location);
+                if self.instances.load().0.contains_key(&id) || self.pending.contains_key(&id) {
+                    return
+                }
+                let init = InstanceInit {secret: self.secret.clone(), location, init: None};
+                let instance: Shared<InstanceState<C>> = Shared::new(init.clone());
+                Services::start::<InstanceService<C>>(init);
+                if instance.load().0.pending().is_some() {
+                    let instance = Instance(instance, self.inbox.clone());
+                    self.instances.update(InstancesRequest::Received(instance));
+                } else {self.pending.insert(id, instance);}
+            }
+            InstancesPredicate::Initialized(id) => {
+                let instance = Instance(self.pending.remove(&id).unwrap(), self.inbox.clone());
+                self.instances.update(InstancesRequest::Received(instance));
+            }
         }
     }
 }
 
-#[macro_export]
-macro_rules! events {
-    ($($item:ty),* $(,)?) => {{
-        vec![$($crate::air::Erased::new::<$item>()),*]
-    }};
-}
+struct InstanceService<C: Contract>(Shared<InstanceState<C>>, AsyncRx<spsc::List<Response>>, Arc<Client>);
+impl<C: Contract> Service for InstanceService<C> {
+    type Init = InstanceInit<C::Init>;
+    type Predicate = InstancePredicate;
 
-pub struct Update(PathBuf, Arc<Value>);
-impl Event for Update {
-    fn pass(self: Box<Self>, _ctx: &mut Context, children: &[Area]) -> Vec<Option<Box<dyn Event>>> {
-        children.iter().map(|_| Some(self.clone() as Box<dyn Event>)).collect()
+    async fn init(init: Self::Init) -> Self {
+        let server = init.location.server;
+        let client = NETWORK.client(server).await;
+        let instance: Shared<InstanceState<C>> = Shared::new(init);
+        let request = instance.update(InstanceRequest::Start).1.unwrap();
+        Self(instance, client.send(request).await, client)
     }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    use tokio::time::{sleep, interval, Duration};
-    use std::convert::Infallible;
-
-    #[derive(Serialize, Deserialize)]
-    pub struct Send(String);
-    impl Send { pub fn new(body: &str) -> Self { Send(body.to_string())}}
-    impl Event for Send {
-        type Error = Infallible;
-      //fn serialize(&self) -> Vec<u8> {serde_json::to_vec(self).unwrap()}
-      //fn deserialize(b: &[u8]) -> Option<Self> {serde_json::from_slice(b).ok()}
-
-        fn eval<B: Beaker>(self, path: &Path, signer: Name, timestamp: u64, beaker: &mut B) -> Result<(), EventError<B::Error, Self::Error>> {
-            beaker.insert("-", into(&format!("{}: {}", signer, self.0)).unwrap())?;
-            Ok(())
+    async fn predicate(&mut self) -> InstancePredicate {
+        tokio::select! {
+            response = self.1.recv() => {
+                InstancePredicate::Response(response.expect("Air closed a response stream"))
+            }
+            _ = self.0.next() => InstancePredicate::Changed,
         }
     }
-
-    #[derive(Hash, PartialEq)]
-    pub struct Room;
-    impl Contract for Room {
-        fn id() -> Id {Id::hash("Room")}
-
-        fn init(self) -> Value {Value::Seq(vec![])}
-
-        fn routes() -> BTreeMap<PathBuf, Events> {
-            BTreeMap::from([
-                (PathBuf::from("/"), events![Send])
-            ])
+    async fn handle(&mut self, predicate: InstancePredicate) {
+        if let InstancePredicate::Response(response) = predicate {
+            let (_, _, notifications) = self.0.update(InstanceRequest::Response(response));
+            for (pending, result, confirmed) in notifications {pending.update(result, confirmed);}
+        }
+        if let Some(request) = self.0.update(InstanceRequest::Request).1 {
+            self.1 = self.2.send(request).await;
         }
     }
+}
 
-    #[tokio::test]
-    async fn test() {
-        let bob = Secret::new();
-        let c = Connection::open("file:bob?mode=memory&cache=shared").unwrap();
+struct InboxService(Shared<InboxState>, HashMap<RequestType, AsyncRx<spsc::List<Response>>>, Arc<Client>);
+impl Service for InboxService {
+    type Init = Secret;
+    type Predicate = InboxPredicate;
 
-        let mut r = Remote::new(c, bob, Contracts::new().add::<Room>()).unwrap();
+    async fn init(secret: Secret) -> Self {
+        let client = NETWORK.client(Name::orange_me()).await;
+        let inbox: Shared<InboxState> = Shared::new(secret);
+        let requests = inbox.update(InboxRequest::Start).1;
+        let mut streams = HashMap::new();
+        for (kind, request) in requests {streams.insert(kind, client.send(request).await);}
+        Self(inbox, streams, client)
+    }
+    async fn predicate(&mut self) -> InboxPredicate {
+        let mut predicates: FuturesUnordered<Predicate<'_, InboxPredicate>> = self.1.iter_mut()
+            .map(|(kind, stream)| Box::pin(async move {
+                let response = stream.recv().await.expect("Air closed an inbox response stream");
+                InboxPredicate::Response(*kind, response)
+            }) as Predicate<'_, InboxPredicate>).collect();
+        predicates.push(Box::pin(async {self.0.next().await; InboxPredicate::Changed}));
+        predicates.next().await.unwrap()
+    }
+    async fn handle(&mut self, predicate: InboxPredicate) {
+        if let InboxPredicate::Response(kind, response) = predicate {
+            if !matches!(response, Response::Read(_, None)) {self.1.remove(&kind);}
+            self.0.update(InboxRequest::Response(kind, response));
+        }
+        for (kind, request) in self.0.update(InboxRequest::Requests).1 {
+            self.1.insert(kind, self.2.send(request).await);
+        }
+    }
+}
 
-        let room = r.create(Room).unwrap();
-        r.send(room, Send::new("Hello")).unwrap();
-        r.send(room, Send::new("Goodbye")).unwrap();
-
-        sleep(Duration::from_millis(20)).await;
-
-        assert_eq!(r.query(room).unwrap(), Ok(Value::Seq(vec![
-            Value::Field(Primitive::String("Hello".to_string())),
-            Value::Field(Primitive::String("Goodbye".to_string()))
-        ])));
+#[derive(Default)]
+struct Network {
+    resolver: Mutex<DefaultResolver>,
+    clients: Mutex<HashMap<Name, Arc<OnceCell<Arc<Client>>>>>,
+}
+impl Network {
+    async fn client(&self, server: Name) -> Arc<Client> {
+        let client = self.clients.lock().await.entry(server).or_default().clone();
+        client.get_or_init(async || {
+            let identity = self.resolver.lock().await.resolve(server, None).await;
+            let mut delay = Duration::from_millis(250);
+            loop {
+                match Client::new((*identity).clone(), "wss").await {
+                    Ok(client) => return Arc::new(client),
+                    Err(error) => log::warn!("Air connection to {server} failed: {error}"),
+                }
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(Duration::from_secs(10));
+            }
+        }).await.clone()
     }
 }
