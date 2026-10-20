@@ -68,7 +68,7 @@
 - Avoid extra example files and application setup already provided by the framework.
 - Keep layout, rendering, input, and platform responsibilities with their appropriate owners.
 - Report hardware actions as application inputs; let the application decide which objects receive those actions.
-- Let child controls emit events to their owner; keep application state and action handling in the owner instead of sharing mutable state with controls.
+- Keep application state in its owner. Child controls act on it by calling the owner's methods, through a callback, or by emitting an event. Never share mutable state through Rc/RefCell, Arc or Mutex unless it is tightly contained and easy to reason about.
 - Normalize platform units and representations at integration boundaries; keep shared data neutral.
 - Follow OS-default device selection and native routing controls; add in-app selectors only when requested.
 - Keep platform-specific routing and session handling in native adapters; keep universal behavior shared.
