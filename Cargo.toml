@@ -14,11 +14,11 @@ demo = []
 
 [dependencies]
 include_dir = "0.7.4"
-maverick_os = {version = "3.0.0", path = "../maverick_os"}
-prism = {package = "prism2", version = "1.0.0", path = "../prism"}
-wgpu_prism = {version = "6.0.0", path = "../wgpu_prism"}
-air = {version = "3.0.0", path = "../air"}
-air_server = {version = "1.0.0", path = "../air_server"}
+maverick_os = "3.0.0"
+prism = {package = "prism2", version = "1.0.0"}
+wgpu_prism = "6.0.0"
+air = "3.0.0"
+air_server = "1.0.0"
 arc-swap = "1.9.2"
 crossfire = "3.1.7"
 futures = "0.3"

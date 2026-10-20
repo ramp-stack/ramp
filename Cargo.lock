@@ -55,6 +55,8 @@ dependencies = [
 [[package]]
 name = "air"
 version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd055c97ebc4f84c65902455c8f6f75eb00e2f6d79d250af701dd544eab117f9"
 dependencies = [
  "chacha20-poly1305",
  "chrono",
@@ -73,6 +75,8 @@ dependencies = [
 [[package]]
 name = "air_server"
 version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b47557cfc8f671a82d7b4bbf42fb715a655a00cb1808733f9cb65d367dafe0d"
 dependencies = [
  "air",
  "arc-swap",
@@ -2551,6 +2555,8 @@ dependencies = [
 [[package]]
 name = "maverick_os"
 version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ada096bf07bc6fb07cc6d8d79a4669db5a38c1bcf72e18522c2b958f1a436ead"
 dependencies = [
  "android-activity",
  "android_logger",
@@ -3774,6 +3780,8 @@ dependencies = [
 [[package]]
 name = "prism2"
 version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1431f92abefca23d762eef9e33ce6ae4d10238a5d6c5dfc9652646e0349acf11"
 dependencies = [
  "air",
  "anyanymap",
@@ -3794,6 +3802,8 @@ dependencies = [
 [[package]]
 name = "prism_proc"
 version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4d615bfef9d3480064eae6546ecd33b36eb0014fa2b95cc8de1e58c870609782"
 dependencies = [
  "proc-macro2 1.0.103",
  "quote 1.0.42",
@@ -5669,6 +5679,8 @@ dependencies = [
 [[package]]
 name = "wgpu_prism"
 version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5684f0418a7c04e38918cc4d154cfc8363adb4e36117f16f08b314408a3067b2"
 dependencies = [
  "bytemuck",
  "image 0.24.9",
