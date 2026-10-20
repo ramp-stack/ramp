@@ -10,8 +10,10 @@ target. An installed FFmpeg package or runtime is not required. Building FFmpeg 
 neither Git nor a separate source download.
 
 macOS and iOS builds use pregenerated FFmpeg bindings and require Rust, Xcode's native compiler
-and target SDK, and Make. Intel targets also require NASM. These builds do not require libclang
-or pkg-config. Subsequent builds reuse Cargo's build cache.
+and target SDK, and Make. NASM is built automatically from bundled source only for Intel
+(`x86`/`x86_64`) targets, preserving FFmpeg's optimized assembly. No separate NASM installation
+or build-time source download is needed. These builds do not require libclang or pkg-config.
+Subsequent builds reuse Cargo's build cache.
 
 Run the application demo with:
 

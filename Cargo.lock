@@ -2558,9 +2558,9 @@ dependencies = [
 
 [[package]]
 name = "maverick_os"
-version = "3.0.1"
+version = "3.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "563c48697a110dd11ed591e32b90ad352cc6a1b8f4dc3210b6ed5d3868a9f365"
+checksum = "8b09dfb6ea4dc01eae76708ff306a5a2df36df63c54d37d6126176f8e152a7d6"
 dependencies = [
  "android-activity",
  "android_logger",
@@ -3903,9 +3903,9 @@ checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 
 [[package]]
 name = "ramp-ffmpeg"
-version = "9.0.1"
+version = "9.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8538bbe10cd874335a842f108bfcf390893939bf44b5e9e9ffacce499987f42"
+checksum = "ef74c17d9835a866af4867b639980049626620787ec4da9a062ee4c1a5f2c87f"
 dependencies = [
  "bitflags 2.13.2",
  "libc",
@@ -3914,22 +3914,33 @@ dependencies = [
 
 [[package]]
 name = "ramp-ffmpeg-sys"
-version = "9.0.2"
+version = "9.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c39bc30c666a26fec843a215214da783c0aa55f7051f4d1e97dbafd2c039b554"
+checksum = "024802be0df70dca7b32bb3f093696804d6ff5ee1d9bcaa5f4bf51f5f77b39b3"
 dependencies = [
  "cc",
  "libc",
  "lzma-rust2",
  "num_cpus",
  "pkg-config",
+ "ramp-nasm",
  "tar",
  "vcpkg",
 ]
 
 [[package]]
+name = "ramp-nasm"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e6f89e5e8c6595de177df2ecd6777d16d781e8cd49a61d40b5cf473bfc75449"
+dependencies = [
+ "lzma-rust2",
+ "tar",
+]
+
+[[package]]
 name = "ramp2"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "air",
  "air_server",
