@@ -2,16 +2,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use prism::hardware::{Cancelled, Data, Image, Media, PickResult};
+use prism::hardware::{Cancelled, Data, Image, Media, PickResult, Visual};
 use prism::traits;
 
 #[derive(Clone)]
 pub struct Hardware(pub maverick_os::Hardware);
 impl traits::Hardware for Hardware {
     type Camera = Camera;
+    type Audio = Audio;
     type Video = Video;
 
     fn start_camera(&self) -> Self::Camera {Camera(self.0.start_camera())}
+    fn audio(&self, bytes: Vec<u8>) -> Option<Self::Audio> {maverick_os::Audio::new(bytes).map(Audio::from)}
     fn video(&self, bytes: Vec<u8>) -> Option<Self::Video> {maverick_os::Video::new(bytes).map(Video::from)}
     fn share(&self, data: &Data) {self.0.share(&Self::to_maverick(data))}
     fn set_clipboard(&self, data: &Data) {self.0.set_clipboard(&Self::to_maverick(data))}
@@ -25,6 +27,7 @@ impl Hardware {
         match data {
             maverick_os::Data::Text(text) => Data::Text(text),
             maverick_os::Data::Image(image) => Data::Image(image),
+            maverick_os::Data::Audio(audio) => Data::Audio(prism::hardware::Audio::new(Audio::from(audio))),
             maverick_os::Data::Video(video) => Data::Video(prism::hardware::Video::new(Video::from(video))),
             maverick_os::Data::File(path) => Data::File(path),
         }
@@ -33,6 +36,11 @@ impl Hardware {
         match data {
             Data::Text(text) => maverick_os::Data::Text(text.clone()),
             Data::Image(image) => maverick_os::Data::Image(image.clone()),
+            Data::Audio(audio) => {
+                let audio = maverick_os::Audio::new(audio.bytes().as_ref().clone())
+                    .expect("Validated audio must remain readable");
+                maverick_os::Data::Audio(audio)
+            }
             Data::Video(video) => {
                 let video = maverick_os::Video::new(video.bytes().as_ref().clone())
                     .expect("A validated video must remain readable");
@@ -59,12 +67,19 @@ macro_rules! picker {
 }
 picker!(maverick_os::Data, Data, Hardware::from_maverick);
 picker!(maverick_os::Image, Image, std::convert::identity);
+picker!(maverick_os::Audio, prism::hardware::Audio, |audio| {
+    prism::hardware::Audio::new(Audio::from(audio))
+});
 picker!(maverick_os::Video, prism::hardware::Video, |video| {
     prism::hardware::Video::new(Video::from(video))
 });
 picker!(maverick_os::Media, Media, |media| match media {
-    maverick_os::Media::Image(image) => Media::Image(image),
+    maverick_os::Media::Audio(audio) => Media::Audio(prism::hardware::Audio::new(Audio::from(audio))),
     maverick_os::Media::Video(video) => Media::Video(prism::hardware::Video::new(Video::from(video))),
+});
+picker!(maverick_os::Visual, Visual, |visual| match visual {
+    maverick_os::Visual::Image(image) => Visual::Image(image),
+    maverick_os::Visual::Video(video) => Visual::Video(prism::hardware::Video::new(Video::from(video))),
 });
 picker!(PathBuf, PathBuf, std::convert::identity);
 
@@ -83,6 +98,24 @@ impl<N: maverick_os::Pickable + 'static, T: Clone + 'static> traits::Picked<T> f
 }
 
 #[derive(Clone, Debug)]
+pub struct Audio(maverick_os::Audio);
+impl From<maverick_os::Audio> for Audio {
+    fn from(audio: maverick_os::Audio) -> Self {Self(audio)}
+}
+impl traits::Audio for Audio {
+    fn bytes(&self) -> &Arc<Vec<u8>> {self.0.bytes()}
+    fn duration(&self) -> Option<Duration> {self.0.duration()}
+    fn sample_rate(&self) -> u32 {self.0.sample_rate()}
+    fn channels(&self) -> u16 {self.0.channels()}
+    fn format(&self) -> &str {self.0.format()}
+    fn codec(&self) -> &str {self.0.codec()}
+    fn player(&self) -> Result<Box<dyn traits::Player>, String> {
+        maverick_os::Player::new(&maverick_os::Media::Audio(self.0.clone()))
+            .map(|player| Box::new(Player(player)) as _)
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Video(maverick_os::Video);
 impl From<maverick_os::Video> for Video {
     fn from(video: maverick_os::Video) -> Self {Self(video)}
@@ -94,8 +127,12 @@ impl traits::Video for Video {
     fn thumbnail(&self) -> Image {self.0.thumbnail()}
     fn format(&self) -> &str {self.0.format()}
     fn codec(&self) -> &str {self.0.codec()}
+    fn audio(&self) -> Option<Box<dyn traits::Audio>> {
+        self.0.audio().map(|audio| Box::new(Audio::from(audio)) as _)
+    }
     fn player(&self) -> Result<Box<dyn traits::Player>, String> {
-        maverick_os::Player::new(&self.0).map(|player| Box::new(Player(player)) as _)
+        maverick_os::Player::new(&maverick_os::Media::Video(self.0.clone()))
+            .map(|player| Box::new(Player(player)) as _)
     }
 }
 
@@ -106,9 +143,11 @@ impl traits::Player for Player {
     fn stop(&self) {self.0.stop()}
     fn set_speed(&self, speed: f64) {self.0.set_speed(speed)}
     fn speed(&self) -> f64 {self.0.speed()}
+    fn set_volume(&self, volume: f64) {self.0.set_volume(volume)}
+    fn volume(&self) -> f64 {self.0.volume()}
     fn seek(&self, position: Duration) {self.0.seek(position)}
     fn position(&self) -> Duration {self.0.position()}
     fn duration(&self) -> Option<Duration> {self.0.duration()}
     fn is_playing(&self) -> bool {self.0.is_playing()}
-    fn frame(&self) -> Image {self.0.frame()}
+    fn frame(&self) -> Option<Image> {self.0.frame()}
 }

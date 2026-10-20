@@ -35,6 +35,12 @@ impl<A: prism::Application> maverick_os::Application for Ramp<A> {
 
     fn on_input(&mut self, input: native::Input) {
         match input {
+            native::Input::Media(media) => self.0.on_event(match media {
+                native::Media::Play => event::MediaEvent::Play,
+                native::Media::Pause => event::MediaEvent::Pause,
+                native::Media::VolumeUp => event::MediaEvent::VolumeUp,
+                native::Media::VolumeDown => event::MediaEvent::VolumeDown,
+            }),
             native::Input::Resized(window) => {
                 self.0.resize(prism::Window {size: window.size, insets: window.insets});
             }

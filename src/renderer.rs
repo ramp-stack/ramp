@@ -16,9 +16,14 @@ impl maverick_os::Renderer for Renderer {
         let size = self.window.physical();
         self.renderer.resize(size.width, size.height);
     }
-    fn draw(&mut self, instructions: Vec<Instruction>) {
+    fn update(&mut self, instructions: Vec<Instruction>) -> bool {
+        let size = self.window.physical();
+        if size.width == 0 || size.height == 0 {return false}
+        self.renderer.update(instructions, size.scale_factor as f32)
+    }
+    fn draw(&mut self) {
         let size = self.window.physical();
         if size.width == 0 || size.height == 0 {return}
-        self.renderer.draw(instructions, size.scale_factor as f32);
+        self.renderer.render();
     }
 }

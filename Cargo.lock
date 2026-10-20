@@ -127,6 +127,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
+name = "alsa"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed7572b7ba83a31e20d1b48970ee402d2e3e0537dcfe0a3ff4d6eb7508617d43"
+dependencies = [
+ "alsa-sys",
+ "bitflags 2.13.2",
+ "cfg-if",
+ "libc",
+]
+
+[[package]]
+name = "alsa-sys"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "db8fee663d06c4e303404ef5f40488a53e062f89ba8bfed81f42325aafad1527"
+dependencies = [
+ "libc",
+ "pkg-config",
+]
+
+[[package]]
 name = "android-activity"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -909,6 +931,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "coreaudio-rs"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1aae284fbaf7d27aa0e292f7677dfbe26503b0d555026f702940805a630eac17"
+dependencies = [
+ "bitflags 1.3.2",
+ "libc",
+ "objc2-audio-toolbox",
+ "objc2-core-audio",
+ "objc2-core-audio-types",
+ "objc2-core-foundation",
+]
+
+[[package]]
+name = "cpal"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cbd307f43cc2a697e2d1f8bc7a1d824b5269e052209e28883e5bc04d095aaa3f"
+dependencies = [
+ "alsa",
+ "coreaudio-rs",
+ "dasp_sample",
+ "jni 0.21.1",
+ "js-sys",
+ "libc",
+ "mach2",
+ "ndk",
+ "ndk-context",
+ "num-derive 0.4.2",
+ "num-traits",
+ "objc2-audio-toolbox",
+ "objc2-core-audio",
+ "objc2-core-audio-types",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "windows 0.54.0",
+]
+
+[[package]]
 name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1052,6 +1114,12 @@ dependencies = [
  "quote 1.0.42",
  "syn 2.0.111",
 ]
+
+[[package]]
+name = "dasp_sample"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c87e182de0887fd5361989c677c4e8f5000cd9491d6d563161a8f3a5519fc7f"
 
 [[package]]
 name = "data-encoding"
@@ -1657,7 +1725,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 1.0.69",
- "windows",
+ "windows 0.58.0",
 ]
 
 [[package]]
@@ -1905,7 +1973,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core",
+ "windows-core 0.58.0",
 ]
 
 [[package]]
@@ -2532,6 +2600,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d947cbb889ed21c2a84be6ffbaebf5b4e0f4340638cba0444907e38b56be084"
 
 [[package]]
+name = "mach2"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d640282b302c0bb0a2a8e0233ead9035e3bed871f0b7e81fe4a1ec829765db44"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "malloc_buf"
 version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2559,8 +2636,6 @@ dependencies = [
 [[package]]
 name = "maverick_os"
 version = "3.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b09dfb6ea4dc01eae76708ff306a5a2df36df63c54d37d6126176f8e152a7d6"
 dependencies = [
  "android-activity",
  "android_logger",
@@ -2568,6 +2643,7 @@ dependencies = [
  "arc-swap",
  "async-trait",
  "block2 0.6.2",
+ "cpal",
  "crossfire",
  "dispatch2",
  "downcast-rs 2.0.2",
@@ -2584,11 +2660,14 @@ dependencies = [
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-av-foundation",
+ "objc2-avf-audio",
+ "objc2-core-audio",
  "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-core-media",
  "objc2-core-video",
  "objc2-foundation 0.3.2",
+ "objc2-media-player",
  "objc2-photos-ui",
  "objc2-ui-kit 0.3.2",
  "objc2-uniform-type-identifiers 0.3.2",
@@ -3011,6 +3090,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-audio-toolbox"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6948501a91121d6399b79abaa33a8aa4ea7857fe019f341b8c23ad6e81b79b08"
+dependencies = [
+ "bitflags 2.13.2",
+ "block2 0.6.2",
+ "libc",
+ "objc2 0.6.5",
+ "objc2-core-audio",
+ "objc2-core-audio-types",
+ "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
 name = "objc2-av-foundation"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3039,7 +3134,11 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13a380031deed8e99db00065c45937da434ca987c034e13b87e4441f9e4090be"
 dependencies = [
+ "bitflags 2.13.2",
+ "block2 0.6.2",
  "objc2 0.6.5",
+ "objc2-audio-toolbox",
+ "objc2-core-audio-types",
  "objc2-foundation 0.3.2",
 ]
 
@@ -3084,10 +3183,13 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1eebcea8b0dbff5f7c8504f3107c68fc061a3eb44932051c8cf8a68d969c3b2"
 dependencies = [
+ "block2 0.6.2",
  "dispatch2",
+ "libc",
  "objc2 0.6.5",
  "objc2-core-audio-types",
  "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]
@@ -3312,6 +3414,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "579edede1c244621cd8229b70ea6e20e6ec3bab5a74afdfd494b446b681e1e64"
 dependencies = [
  "objc2 0.6.5",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
+name = "objc2-media-player"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "85f2a98483f6e76313cb85a5a185eaa3cda86a177b13a8852d56cbd0085bf635"
+dependencies = [
+ "bitflags 2.13.2",
+ "block2 0.6.2",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-av-foundation",
+ "objc2-core-foundation",
  "objc2-foundation 0.3.2",
 ]
 
@@ -3768,8 +3885,6 @@ dependencies = [
 [[package]]
 name = "prism2"
 version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1431f92abefca23d762eef9e33ce6ae4d10238a5d6c5dfc9652646e0349acf11"
 dependencies = [
  "air",
  "anyanymap",
@@ -3790,8 +3905,6 @@ dependencies = [
 [[package]]
 name = "prism_proc"
 version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d615bfef9d3480064eae6546ecd33b36eb0014fa2b95cc8de1e58c870609782"
 dependencies = [
  "proc-macro2 1.0.103",
  "quote 1.0.42",
@@ -5698,8 +5811,8 @@ dependencies = [
  "wasm-bindgen",
  "web-sys",
  "wgpu-types",
- "windows",
- "windows-core",
+ "windows 0.58.0",
+ "windows-core 0.58.0",
 ]
 
 [[package]]
@@ -5719,8 +5832,6 @@ dependencies = [
 [[package]]
 name = "wgpu_prism"
 version = "6.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5684f0418a7c04e38918cc4d154cfc8363adb4e36117f16f08b314408a3067b2"
 dependencies = [
  "bytemuck",
  "image 0.24.9",
@@ -5750,11 +5861,31 @@ dependencies = [
 
 [[package]]
 name = "windows"
+version = "0.54.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9252e5725dbed82865af151df558e754e4a3c2c30818359eb17465f1346a1b49"
+dependencies = [
+ "windows-core 0.54.0",
+ "windows-targets 0.52.6",
+]
+
+[[package]]
+name = "windows"
 version = "0.58.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd04d41d93c4992d421894c18c8b43496aa748dd4c081bac0dc93eb0489272b6"
 dependencies = [
- "windows-core",
+ "windows-core 0.58.0",
+ "windows-targets 0.52.6",
+]
+
+[[package]]
+name = "windows-core"
+version = "0.54.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12661b9c89351d684a50a8a643ce5f608e20243b9fb84687800163429f161d65"
+dependencies = [
+ "windows-result 0.1.2",
  "windows-targets 0.52.6",
 ]
 
@@ -5766,7 +5897,7 @@ checksum = "6ba6d44ec8c2591c134257ce647b7ea6b20335bf6379a27dac5f1641fcf59f99"
 dependencies = [
  "windows-implement",
  "windows-interface",
- "windows-result",
+ "windows-result 0.2.0",
  "windows-strings",
  "windows-targets 0.52.6",
 ]
@@ -5801,6 +5932,15 @@ checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
 
 [[package]]
 name = "windows-result"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e383302e8ec8515204254685643de10811af0ed97ea37210dc26fb0032647f8"
+dependencies = [
+ "windows-targets 0.52.6",
+]
+
+[[package]]
+name = "windows-result"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d1043d8214f791817bab27572aaa8af63732e11bf84aa21a45a78d6c317ae0e"
@@ -5814,7 +5954,7 @@ version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4cd9b125c486025df0eabcb585e62173c6c9eddcec5d117d3b6e8c30e2ee4d10"
 dependencies = [
- "windows-result",
+ "windows-result 0.2.0",
  "windows-targets 0.52.6",
 ]
 
