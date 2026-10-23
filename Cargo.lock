@@ -302,7 +302,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
  "wl-clipboard-rs",
  "x11rb",
 ]
@@ -1412,7 +1412,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1863,7 +1863,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 1.0.69",
- "windows 0.54.0",
+ "windows 0.58.0",
 ]
 
 [[package]]
@@ -2767,9 +2767,9 @@ dependencies = [
 
 [[package]]
 name = "maverick_os"
-version = "3.0.3"
+version = "4.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b34655a787536932a0d7ba772b23eb1f124f3aeef0dcaed437b938f52b41a9c5"
+checksum = "a119ba4f105e5a28acb5fb0dc91fe3b4c2c3f72c33e2a576305a62b00ef78ec7"
 dependencies = [
  "android-activity",
  "android_logger",
@@ -3824,7 +3824,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.45.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4087,7 +4087,6 @@ dependencies = [
  "fontdue",
  "futures",
  "futures-timer",
- "image 0.24.9",
  "include_dir",
  "inventory",
  "nsvg",
@@ -4212,9 +4211,9 @@ checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 
 [[package]]
 name = "ramp-ffmpeg"
-version = "9.0.3"
+version = "9.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1294d3c12a4987afe3dfb82c4426881829d699cbd3c74a8d5dca63a87ca6fce3"
+checksum = "f269fab707b23eff9de2112a1545e3a2c34d615adfd4c3a5aee0381306d4149a"
 dependencies = [
  "bitflags 2.13.2",
  "libc",
@@ -4222,16 +4221,37 @@ dependencies = [
 ]
 
 [[package]]
-name = "ramp-ffmpeg-sys"
-version = "9.0.4"
+name = "ramp-ffmpeg-ios-arm64"
+version = "9.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7f9fc2c6aca1d6e846d31852a8f0e2bbbafcd3871d4dd307eee1b6ab9b2d057"
+checksum = "eff124fa2f1648f28556272e70d93df405bf244a481693d944c8f83efb62baf9"
+
+[[package]]
+name = "ramp-ffmpeg-ios-sim-arm64"
+version = "9.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f13dec659658ee3759538e623564fd72470777f7addac978a2f1290c7c308c6"
+
+[[package]]
+name = "ramp-ffmpeg-ios-sim-x86_64"
+version = "9.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cef3359dc68b2316b96d7a4a42989ffd19bd752878c6d7c6358b59a922098b30"
+
+[[package]]
+name = "ramp-ffmpeg-sys"
+version = "9.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dd4ae4cd5a1349c5608711b34c09d6f593ca884415d9646c39920d7011c8bd8b"
 dependencies = [
  "cc",
  "libc",
  "lzma-rust2",
  "num_cpus",
  "pkg-config",
+ "ramp-ffmpeg-ios-arm64",
+ "ramp-ffmpeg-ios-sim-arm64",
+ "ramp-ffmpeg-ios-sim-x86_64",
  "ramp-nasm",
  "tar",
  "vcpkg",
@@ -4257,7 +4277,6 @@ dependencies = [
  "crossfire",
  "erased-serde",
  "futures",
- "image 0.24.9",
  "include_dir",
  "log",
  "maverick_os",
@@ -4611,7 +4630,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.11.0",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5228,7 +5247,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.2",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6131,7 +6150,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

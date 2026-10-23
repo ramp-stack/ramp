@@ -4,16 +4,16 @@ RAMP connects Maverick OS hardware, AIR services, and Prism's application interf
 
 ## Building
 
-Maverick builds FFmpeg automatically through Cargo and links its libraries statically into the
-application. FFmpeg 9.0.2 source ships in the transitive binding crate and is compiled for the
-target. An installed FFmpeg package or runtime is not required. Building FFmpeg requires
-neither Git nor a separate source download.
+Maverick 4.0.0 requires `ramp-ffmpeg` 9.0.4 or later, which requires `ramp-ffmpeg-sys`
+9.0.5 or later. FFmpeg is linked statically; no installed FFmpeg package or runtime is needed.
 
-macOS and iOS builds use pregenerated FFmpeg bindings and require Rust, Xcode's native compiler
-and target SDK, and Make. NASM is built automatically from bundled source only for Intel
-(`x86`/`x86_64`) targets, preserving FFmpeg's optimized assembly. No separate NASM installation
-or build-time source download is needed. These builds do not require libclang or pkg-config.
-Subsequent builds reuse Cargo's build cache.
+iOS device and simulator builds use separate precompiled FFmpeg 9.0.2 libraries and
+pregenerated Rust bindings. Cargo selects the matching device or simulator package. These
+builds require Rust and the Xcode SDK/linker, but do not compile FFmpeg or NASM or run Make.
+
+Other targets compile the bundled FFmpeg source with a native compiler and Make. macOS uses
+pregenerated bindings. Intel targets outside iOS build bundled NASM automatically; no separate
+NASM installation or FFmpeg source download is needed. Subsequent builds reuse Cargo's cache.
 
 Run the application demo with:
 
@@ -103,9 +103,23 @@ Run the standalone server from the `air_notifications` project with `cargo run -
 Its deployment files and server documentation live there. RAMP only has the `demo` feature;
 Maverick's hardware is always available. Neither crate has a special server-only build mode.
 
-Frontend dependencies use sibling paths. Backend dependencies use published crate versions;
+Frontend dependencies use sibling paths. Maverick 4.0.0 and the other backend dependencies
+use published versions, so frontend builds do not require a local Maverick checkout.
 `.cargo/config.toml` retains only frontend overrides. Apple push entitlements, signing, and notification
 permission are still required for actual device delivery.
+
+## Content construction
+
+Ramp registers its Image and Media implementations when linked. Applications use Prism's
+`Image::read(reader)`, `Image::from_rgba((width, height), pixels)`, `Media::new()`,
+`Media::read(reader)`, and `Media::try_from(...)` with the same arguments as Maverick.
+Hardware owns device operations such as picking and capture; it has no content-construction helpers.
+`image.pixels()` borrows the decoded RGBA8 buffer and its actual dimensions without copying.
+`image.write(writer, ImageFormat::Png)` encodes through the native backend; all eight ImageFormat
+variants match Prism and Maverick.
+
+Backend implementers submit `Prism::content_backend::<Image, Media>()` through inventory once.
+The returned registration value is opaque; the `ContentBackend` record stays private inside Prism.
 
 ## Change futures
 
@@ -115,6 +129,9 @@ handles directly. Task contexts and wakers are confined to Maverick's window-loo
 
 Front-end components declare separate `#[on_change(source_expression)]` implementations of
 `OnChange<Update>`. Prism generates the distinguishing tag and registration, then combines
-independently borrowed sources and children into one `changed()` future per component.
-The completed future carries a deferred `Change`, applied after competing waits are dropped.
-Use `ChangeSource::changed()` for optional sources that should stay asleep when inactive.
+independently borrowed sources and children into one internal `listen()` future per component.
+The winner returns its update and child path. Competing waits are dropped before the root
+passes `Context` down that path and calls the matching handler. `Drawable::changed(ctx)`
+performs both steps and returns `()`.
+Await each handle's `next()` future directly. For optional sources, match the option and await
+`std::future::pending()` while it is absent. The next listener rebuild observes the new handle.

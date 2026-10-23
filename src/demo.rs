@@ -1,4 +1,5 @@
 use air::{Contract, Id, Metadata, Name};
+use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
 use ramp2::prism;
 use prism::{Application, Context};
 use prism::air::{Instance, Instances};
@@ -8,6 +9,8 @@ use prism::drawable::text::{Align, Font, Text};
 use prism::events::*;
 use prism::hardware::Data;
 use serde::{Deserialize, Serialize};
+
+use std::any::Any;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug)]
@@ -28,27 +31,32 @@ impl Component for Demo {
     fn children(&self) -> Vec<&dyn Drawable> {self.ui.children()}
     fn children_mut(&mut self) -> Vec<&mut dyn Drawable> {self.ui.children_mut()}
     fn layout(&self) -> &dyn Layout {&self.ui.flow}
-    fn changed(&mut self) -> ChangeFuture<'_> {
-        Box::pin(Change::select(vec![
+    fn listen(&mut self) -> ListenFuture<'_> {
+        Box::pin(ChangeHandler::select(vec![
             Box::pin(async {
-                let room = self.rooms.next().await;
-                Change::new(move |drawable, _| {
-                    let demo = drawable.downcast_mut::<Self>().unwrap();
-                    demo.chats.entry(room.id()).or_insert(room);
-                    demo.ui = demo.view();
-                })
+                (vec![], Box::new(self.rooms.next().await) as Box<dyn Any>)
             }),
             Box::pin(async {
-                ChangeSource::changed(&mut self.chats).await;
-                Change::new(|drawable, _| {
-                    let demo = drawable.downcast_mut::<Self>().unwrap();
-                    demo.ui = demo.view();
-                })
+                let mut waits: FuturesUnordered<_> = self.chats.values_mut()
+                    .map(|chat| chat.next()).collect();
+                if waits.next().await.is_none() {std::future::pending::<()>().await;}
+                while let Some(Some(_)) = waits.next().now_or_never() {}
+                (vec![], Box::new(()) as Box<dyn Any>)
             }),
-            Box::pin(async {
-                Drawable::changed(&mut self.ui).await.map::<Self>(|demo| &mut demo.ui)
-            }),
+            Drawable::listen(&mut self.ui),
         ]))
+    }
+    fn update(&mut self, ctx: &mut Context, mut path: Vec<usize>, update: Box<dyn Any>) {
+        match path.pop().unwrap() {
+            0 => {
+                let room = *update.downcast::<Instance<ChatRoom>>().unwrap();
+                self.chats.entry(room.id()).or_insert(room);
+                self.ui = self.view();
+            }
+            1 => self.ui = self.view(),
+            2 => Drawable::update(&mut self.ui, ctx, path, update),
+            _ => unreachable!(),
+        }
     }
 }
 impl Application for Demo {
@@ -349,10 +357,9 @@ struct Scroll {
     bottom: bool,
 }
 impl Drawable for Scroll {
-    fn changed(&mut self) -> ChangeFuture<'_> {
-        Box::pin(async move {
-            Drawable::changed(&mut self.panel).await.map::<Self>(|scroll| &mut scroll.panel)
-        })
+    fn listen(&mut self) -> ListenFuture<'_> {Drawable::listen(&mut self.panel)}
+    fn update(&mut self, ctx: &mut Context, path: Vec<usize>, update: Box<dyn Any>) {
+        Drawable::update(&mut self.panel, ctx, path, update);
     }
 
     fn size_range(&self) -> RangeTree {self.panel.size_range()}

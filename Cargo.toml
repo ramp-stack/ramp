@@ -14,7 +14,7 @@ demo = []
 
 [dependencies]
 include_dir = {version = "0.7.4"}
-maverick_os = "3.0.3"
+maverick_os = {version = "4.0.0"}
 prism = {package = "prism2", version = "1.0.1", path = "../prism"}
 wgpu_prism = {version = "6.0.1", path = "../wgpu_prism"}
 air = "3.0.1"
@@ -25,7 +25,6 @@ futures = "0.3"
 serde_json = "1"
 tokio = {version = "1.53", features = ["sync", "macros", "rt-multi-thread", "time"]}
 log = "0.4.33"
-image = {version = "0.24.9"}
 serde = {version = "1", features = ["derive", "rc"]}
 
 erased-serde = {version = "0.4"}
