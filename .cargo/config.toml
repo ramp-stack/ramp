@@ -1,0 +1,4 @@
+[patch.crates-io]
+prism2 = {path = "../prism"}
+prism_proc = {path = "../prism/prism_proc"}
+wgpu_prism = {path = "../wgpu_prism"}

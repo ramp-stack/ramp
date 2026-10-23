@@ -1,17 +1,18 @@
+pub use air_notifications as notifications;
+pub use maverick_os;
+pub use prism;
 use ::air::Secret;
 use maverick_os::inputs as native;
 use maverick_os::{Data, Hardware, LogicalWindow};
 use prism::events as event;
 
-pub use maverick_os;
-pub use prism;
-pub use renderer::Renderer;
-
 pub mod air;
 pub mod hardware;
+mod shared;
 mod renderer;
+pub use renderer::Renderer;
 
-pub struct Ramp<A: prism::Application>(prism::Prism<A>);
+pub struct Ramp<A: prism::Application>(prism::Prism, std::marker::PhantomData<A>);
 impl<A: prism::Application> maverick_os::Application for Ramp<A> {
     type Renderer = Renderer;
 
@@ -19,22 +20,30 @@ impl<A: prism::Application> maverick_os::Application for Ramp<A> {
 
     fn new(hardware: Hardware, window: LogicalWindow) -> Self {
         let key = "ramp.air.identity";
-        let secret = match hardware.get_cache(key) {
+        let secret = match hardware.get_cache(key).expect("Could not read the Air identity") {
             Some(Data::Text(saved)) => serde_json::from_str(&saved).expect("Invalid saved Air identity"),
             Some(_) => panic!("The saved Air identity must be text"),
             None => {
                 let secret = Secret::new();
                 let saved = serde_json::to_string(&secret).expect("Could not encode the Air identity");
-                hardware.set_cache(key, &Data::Text(saved));
+                hardware.set_cache(key, &Data::Text(saved)).expect("Could not save the Air identity");
                 secret
             }
         };
-        let window = prism::Window {size: window.size, insets: window.insets};
-        Self(prism::Prism::new(hardware::Hardware(hardware), air::Air::new(secret), window))
+        let window = prism::Window {
+            size: window.size, insets: window.insets, keyboard_visible: window.keyboard_visible,
+            touch_controls: window.touch_controls,
+        };
+        let air = prism::air::Air::new(air::Air::new(secret, &hardware));
+        let prism = prism::Prism::new::<A, _>(hardware::Hardware(hardware), air, window);
+        Self(prism, std::marker::PhantomData)
     }
 
     fn on_input(&mut self, input: native::Input) {
         match input {
+            native::Input::Notification(header, body) => {
+                self.0.on_event(event::Notification {header, body});
+            }
             native::Input::Media(media) => self.0.on_event(match media {
                 native::Media::Play => event::MediaEvent::Play,
                 native::Media::Pause => event::MediaEvent::Pause,
@@ -42,7 +51,10 @@ impl<A: prism::Application> maverick_os::Application for Ramp<A> {
                 native::Media::VolumeDown => event::MediaEvent::VolumeDown,
             }),
             native::Input::Resized(window) => {
-                self.0.resize(prism::Window {size: window.size, insets: window.insets});
+                self.0.resize(prism::Window {
+                    size: window.size, insets: window.insets, keyboard_visible: window.keyboard_visible,
+                    touch_controls: window.touch_controls,
+                });
             }
             native::Input::WindowFocused(focused) => {
                 self.0.on_event(event::WindowEvent::Focused(focused));
@@ -115,7 +127,8 @@ impl<A: prism::Application> maverick_os::Application for Ramp<A> {
         }
     }
 
-    fn on_tick(&mut self) -> Vec<prism::drawable::Instruction> {self.0.draw()}
+    fn draw(&mut self) -> Vec<prism::drawable::Instruction> {self.0.draw()}
+    async fn changed(&mut self) {self.0.changed().await;}
 }
 
 #[macro_export]

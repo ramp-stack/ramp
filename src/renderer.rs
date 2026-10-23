@@ -1,7 +1,10 @@
 use maverick_os::Window;
 use prism::drawable::Instruction;
 
-pub struct Renderer {window: Window, renderer: wgpu_prism::Renderer<'static>}
+pub struct Renderer {
+    window: Window,
+    renderer: wgpu_prism::Renderer<'static>,
+}
 impl maverick_os::Renderer for Renderer {
     type Instructions = Vec<Instruction>;
 
@@ -21,9 +24,9 @@ impl maverick_os::Renderer for Renderer {
         if size.width == 0 || size.height == 0 {return false}
         self.renderer.update(instructions, size.scale_factor as f32)
     }
-    fn draw(&mut self) {
+    fn draw(&mut self) -> bool {
         let size = self.window.physical();
-        if size.width == 0 || size.height == 0 {return}
-        self.renderer.render();
+        if size.width == 0 || size.height == 0 {return false}
+        self.renderer.render()
     }
 }

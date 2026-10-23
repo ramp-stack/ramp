@@ -1,50 +1,82 @@
+use prism::hardware::{
+    Audio, Cancelled, Chunks, Data, Format, Frame, PickResult, PlaybackMode, Tracks, Video, Visual,
+};
+use prism::traits;
+
+use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::ops::{Bound, Deref};
 use std::time::Duration;
-
-use prism::hardware::{Cancelled, Data, Image, Media, PickResult, Visual};
-use prism::traits;
 
 #[derive(Clone)]
 pub struct Hardware(pub maverick_os::Hardware);
 impl traits::Hardware for Hardware {
-    type Camera = Camera;
-    type Audio = Audio;
-    type Video = Video;
+    type Image = Image;
+    type Media = Media;
 
-    fn start_camera(&self) -> Self::Camera {Camera(self.0.start_camera())}
-    fn audio(&self, bytes: Vec<u8>) -> Option<Self::Audio> {maverick_os::Audio::new(bytes).map(Audio::from)}
-    fn video(&self, bytes: Vec<u8>) -> Option<Self::Video> {maverick_os::Video::new(bytes).map(Video::from)}
+    fn read_image(&self, reader: &mut dyn Read) -> Result<Image, String> {
+        maverick_os::Image::read(reader).map(Image)
+    }
+    fn image_from_rgba(&self, image: Arc<image::RgbaImage>) -> Image {Image(image.into())}
+
+    fn media(&self) -> Media {Media(maverick_os::Media::new())}
+    fn media_from_sound(&self, sound: prism::hardware::Sound) -> Result<Media, String> {
+        maverick_os::Media::try_from(maverick_os::Sound {
+            sample_rate: sound.sample_rate, channels: sound.channels, samples: sound.samples,
+        }).map(Media)
+    }
+    fn media_from_image(&self, image: prism::hardware::Image, duration: Duration) -> Result<Media, String> {
+        maverick_os::Media::try_from((Image::native(&image), duration)).map(Media)
+    }
+    fn read_media(&self, reader: &mut dyn traits::Reader) -> Result<Media, String> {
+        maverick_os::Media::read(reader).map(Media)
+    }
+    fn open_keyboard(&self) -> prism::hardware::Keyboard {
+        prism::hardware::Keyboard::new(Keyboard {_session: self.0.open_keyboard()})
+    }
+    fn start_camera(&self) -> Result<prism::hardware::Camera, String> {
+        let camera = self.0.start_camera()?;
+        let media = prism::hardware::Media::new(Media(camera.as_ref().clone()));
+        Ok(prism::hardware::Camera::new(media, Camera(camera)))
+    }
+    fn start_microphone(&self) -> Result<prism::hardware::Microphone, String> {
+        let microphone = self.0.start_microphone()?;
+        let media = prism::hardware::Media::new(Media(microphone.as_ref().clone()));
+        Ok(prism::hardware::Microphone::new(media, Microphone(microphone)))
+    }
+    fn start_capture(&self) -> Result<prism::hardware::Capture, String> {
+        let capture = self.0.start_capture()?;
+        let media = prism::hardware::Media::new(Media(capture.as_ref().clone()));
+        Ok(prism::hardware::Capture::new(media, Capture(capture)))
+    }
     fn share(&self, data: &Data) {self.0.share(&Self::to_maverick(data))}
     fn set_clipboard(&self, data: &Data) {self.0.set_clipboard(&Self::to_maverick(data))}
     fn get_clipboard(&self) -> Option<Data> {self.0.get_clipboard().map(Self::from_maverick)}
-    fn set_cache(&self, key: &str, data: &Data) {self.0.set_cache(key, &Self::to_maverick(data))}
-    fn get_cache(&self, key: &str) -> Option<Data> {self.0.get_cache(key).map(Self::from_maverick)}
+    fn set_cache(&self, key: &str, data: &Data) -> Result<(), String> {
+        self.0.set_cache(key, &Self::to_maverick(data))
+    }
+    fn get_cache(&self, key: &str) -> Result<Option<Data>, String> {
+        self.0.get_cache(key).map(|data| data.map(Self::from_maverick))
+    }
     fn trigger_haptic(&self) {self.0.trigger_haptic()}
 }
 impl Hardware {
     fn from_maverick(data: maverick_os::Data) -> Data {
         match data {
             maverick_os::Data::Text(text) => Data::Text(text),
-            maverick_os::Data::Image(image) => Data::Image(image),
-            maverick_os::Data::Audio(audio) => Data::Audio(prism::hardware::Audio::new(Audio::from(audio))),
-            maverick_os::Data::Video(video) => Data::Video(prism::hardware::Video::new(Video::from(video))),
+            maverick_os::Data::Image(image) => Data::Image(Image::wrap(image)),
+            maverick_os::Data::Media(media) => Data::Media(prism::hardware::Media::new(Media(media))),
             maverick_os::Data::File(path) => Data::File(path),
         }
     }
     fn to_maverick(data: &Data) -> maverick_os::Data {
         match data {
             Data::Text(text) => maverick_os::Data::Text(text.clone()),
-            Data::Image(image) => maverick_os::Data::Image(image.clone()),
-            Data::Audio(audio) => {
-                let audio = maverick_os::Audio::new(audio.bytes().as_ref().clone())
-                    .expect("Validated audio must remain readable");
-                maverick_os::Data::Audio(audio)
-            }
-            Data::Video(video) => {
-                let video = maverick_os::Video::new(video.bytes().as_ref().clone())
-                    .expect("A validated video must remain readable");
-                maverick_os::Data::Video(video)
+            Data::Image(image) => maverick_os::Data::Image(Image::native(image)),
+            Data::Media(media) => {
+                let media = media.downcast_ref::<Media>().expect("Media uses another backend");
+                maverick_os::Data::Media(media.0.clone())
             }
             Data::File(path) => maverick_os::Data::File(path.clone()),
         }
@@ -66,79 +98,144 @@ macro_rules! picker {
     };
 }
 picker!(maverick_os::Data, Data, Hardware::from_maverick);
-picker!(maverick_os::Image, Image, std::convert::identity);
-picker!(maverick_os::Audio, prism::hardware::Audio, |audio| {
-    prism::hardware::Audio::new(Audio::from(audio))
-});
-picker!(maverick_os::Video, prism::hardware::Video, |video| {
-    prism::hardware::Video::new(Video::from(video))
-});
-picker!(maverick_os::Media, Media, |media| match media {
-    maverick_os::Media::Audio(audio) => Media::Audio(prism::hardware::Audio::new(Audio::from(audio))),
-    maverick_os::Media::Video(video) => Media::Video(prism::hardware::Video::new(Video::from(video))),
-});
+picker!(maverick_os::Image, prism::hardware::Image, Image::wrap);
+picker!(maverick_os::Media, prism::hardware::Media, |media| prism::hardware::Media::new(Media(media)));
 picker!(maverick_os::Visual, Visual, |visual| match visual {
-    maverick_os::Visual::Image(image) => Visual::Image(image),
-    maverick_os::Visual::Video(video) => Visual::Video(prism::hardware::Video::new(Video::from(video))),
+    maverick_os::Visual::Image(image) => Visual::Image(Image::wrap(image)),
+    maverick_os::Visual::Video(video) => Visual::Video(Video(prism::hardware::Media::new(Media(video.0)))),
 });
+picker!(maverick_os::Video, Video, |video| Video(prism::hardware::Media::new(Media(video.0))));
+picker!(maverick_os::Audio, Audio, |audio| Audio(prism::hardware::Media::new(Media(audio.0))));
 picker!(PathBuf, PathBuf, std::convert::identity);
 
 #[derive(Clone)]
 pub struct Camera(maverick_os::Camera);
-impl traits::Camera for Camera {
-    fn frame(&self) -> Image {self.0.frame()}
+impl traits::Capture for Camera {
+    fn error(&self) -> Option<String> {self.0.error()}
+}
+
+#[derive(Clone)]
+pub struct Microphone(maverick_os::Microphone);
+impl traits::Capture for Microphone {
+    fn error(&self) -> Option<String> {self.0.error()}
+}
+
+#[derive(Clone)]
+pub struct Capture(maverick_os::Capture);
+impl traits::Capture for Capture {
+    fn error(&self) -> Option<String> {self.0.error()}
 }
 
 pub struct Picked<N: maverick_os::Pickable, T>(maverick_os::Picked<N>, fn(N) -> T);
 impl<N: maverick_os::Pickable + 'static, T: Clone + 'static> traits::Picked<T> for Picked<N, T> {
-    async fn get(self) -> PickResult<T> {self.0.get().await.map(self.1).map_err(|_| Cancelled)}
-    fn try_get(&mut self) -> Option<PickResult<T>> {
-        self.0.try_get().map(|result| result.map(self.1).map_err(|_| Cancelled))
-    }
+    async fn get(&mut self) -> PickResult<T> {self.0.get().await.map(self.1).map_err(|_| Cancelled)}
 }
 
-#[derive(Clone, Debug)]
-pub struct Audio(maverick_os::Audio);
-impl From<maverick_os::Audio> for Audio {
-    fn from(audio: maverick_os::Audio) -> Self {Self(audio)}
-}
-impl traits::Audio for Audio {
-    fn bytes(&self) -> &Arc<Vec<u8>> {self.0.bytes()}
-    fn duration(&self) -> Option<Duration> {self.0.duration()}
-    fn sample_rate(&self) -> u32 {self.0.sample_rate()}
-    fn channels(&self) -> u16 {self.0.channels()}
-    fn format(&self) -> &str {self.0.format()}
-    fn codec(&self) -> &str {self.0.codec()}
-    fn player(&self) -> Result<Box<dyn traits::Player>, String> {
-        maverick_os::Player::new(&maverick_os::Media::Audio(self.0.clone()))
-            .map(|player| Box::new(Player(player)) as _)
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Image(maverick_os::Image);
+impl Image {
+    fn wrap(image: maverick_os::Image) -> prism::hardware::Image {
+        prism::hardware::Image::new(Self(image))
+    }
+    fn native(image: &prism::hardware::Image) -> maverick_os::Image {
+        image.downcast_ref::<Self>().expect("Image uses another backend").0.clone()
     }
 }
-
-#[derive(Clone, Debug)]
-pub struct Video(maverick_os::Video);
-impl From<maverick_os::Video> for Video {
-    fn from(video: maverick_os::Video) -> Self {Self(video)}
-}
-impl traits::Video for Video {
-    fn bytes(&self) -> &Arc<Vec<u8>> {self.0.bytes()}
-    fn duration(&self) -> Option<Duration> {self.0.duration()}
+impl traits::Image for Image {
     fn dimensions(&self) -> (u32, u32) {self.0.dimensions()}
-    fn thumbnail(&self) -> Image {self.0.thumbnail()}
-    fn format(&self) -> &str {self.0.format()}
-    fn codec(&self) -> &str {self.0.codec()}
-    fn audio(&self) -> Option<Box<dyn traits::Audio>> {
-        self.0.audio().map(|audio| Box::new(Audio::from(audio)) as _)
+}
+impl Deref for Image {
+    type Target = Arc<image::RgbaImage>;
+    fn deref(&self) -> &Self::Target {&self.0}
+}
+impl PartialEq<prism::hardware::Image> for Image {
+    fn eq(&self, other: &prism::hardware::Image) -> bool {
+        other.downcast_ref::<Self>().is_some_and(|other| self == other)
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct Media(maverick_os::Media);
+impl From<maverick_os::Media> for Media {
+    fn from(media: maverick_os::Media) -> Self {Self(media)}
+}
+impl Media {
+    fn tracks(tracks: Tracks) -> maverick_os::Tracks {
+        match tracks {
+            Tracks::Audio => maverick_os::Tracks::Audio,
+            Tracks::Video => maverick_os::Tracks::Video,
+            Tracks::Both => maverick_os::Tracks::Both,
+        }
+    }
+}
+impl traits::Media for Media {
     fn player(&self) -> Result<Box<dyn traits::Player>, String> {
-        maverick_os::Player::new(&maverick_os::Media::Video(self.0.clone()))
-            .map(|player| Box::new(Player(player)) as _)
+        maverick_os::Player::new(&self.0).map(|player| Box::new(Player(player)) as _)
     }
+    fn copy(&self, range: (Bound<Duration>, Bound<Duration>), tracks: Tracks) -> Result<Box<dyn traits::Media>, String> {
+        self.0.copy(range, Self::tracks(tracks)).map(|media| Box::new(Self(media)) as _)
+    }
+    fn replace(&self, range: (Bound<Duration>, Bound<Duration>), replacement: &prism::hardware::Media, tracks: Tracks) -> Result<(), String> {
+        let replacement = replacement.downcast_ref::<Self>().expect("Media uses another backend");
+        self.0.replace(range, &replacement.0, Self::tracks(tracks))
+    }
+    fn write(&self, writer: &mut dyn traits::Writer, format: Format) -> Result<(), String> {
+        let format = match format {
+            Format::Mp4_Mpeg4p2_Aac => maverick_os::Format::Mp4_Mpeg4p2_Aac,
+            Format::Mp4_Mpeg4p2 => maverick_os::Format::Mp4_Mpeg4p2,
+            Format::Mkv_Ffv1_Flac => maverick_os::Format::Mkv_Ffv1_Flac,
+            Format::Mkv_Ffv1_PcmF32le => maverick_os::Format::Mkv_Ffv1_PcmF32le,
+            Format::Mkv_Ffv1 => maverick_os::Format::Mkv_Ffv1,
+            Format::Mov_ProRes422_PcmS16le => maverick_os::Format::Mov_ProRes422_PcmS16le,
+            Format::Mov_ProRes422 => maverick_os::Format::Mov_ProRes422,
+            Format::M4a_Aac => maverick_os::Format::M4a_Aac,
+            Format::M4a_Alac => maverick_os::Format::M4a_Alac,
+            Format::Wav_PcmS16le => maverick_os::Format::Wav_PcmS16le,
+            Format::Wav_PcmF32le => maverick_os::Format::Wav_PcmF32le,
+            Format::Flac_Flac => maverick_os::Format::Flac_Flac,
+        };
+        self.0.write(writer, format)
+    }
+    fn append(&self, other: &prism::hardware::Media) {
+        let other = other.downcast_ref::<Self>().expect("Media uses another backend");
+        self.0.append(&other.0)
+    }
+    fn chunks(&self, duration: Duration) -> Result<Chunks, String> {
+        let chunks = self.0.chunks(duration)?;
+        Ok(Chunks::new(chunks.map(|chunk| prism::hardware::Media::new(Self(chunk)))))
+    }
+    fn duration(&self) -> Duration {self.0.duration()}
+    fn dimensions(&self) -> Option<(u32, u32)> {self.0.dimensions()}
+    fn thumbnail(&self) -> Option<prism::hardware::Image> {self.0.thumbnail().map(Image::wrap)}
 }
 
 #[derive(Clone, Debug)]
 pub struct Player(maverick_os::Player);
+impl Player {
+    fn from_mode(mode: maverick_os::PlaybackMode) -> PlaybackMode {
+        match mode {
+            maverick_os::PlaybackMode::Default => PlaybackMode::Default,
+            maverick_os::PlaybackMode::Live(delay) => PlaybackMode::Live(delay),
+            maverick_os::PlaybackMode::Loop => PlaybackMode::Loop,
+        }
+    }
+    fn from_frame(frame: maverick_os::Frame) -> Frame {
+        Frame {
+            image: frame.image.map(Image::wrap), position: frame.position, duration: frame.duration,
+            mode: Self::from_mode(frame.mode), speed: frame.speed, volume: frame.volume,
+            playing: frame.playing, error: frame.error,
+        }
+    }
+}
 impl traits::Player for Player {
+    fn set_mode(&self, mode: PlaybackMode) {
+        self.0.set_mode(match mode {
+            PlaybackMode::Default => maverick_os::PlaybackMode::Default,
+            PlaybackMode::Live(delay) => maverick_os::PlaybackMode::Live(delay),
+            PlaybackMode::Loop => maverick_os::PlaybackMode::Loop,
+        });
+    }
+    fn mode(&self) -> PlaybackMode {Self::from_mode(self.0.mode())}
     fn start(&self) {self.0.start()}
     fn stop(&self) {self.0.stop()}
     fn set_speed(&self, speed: f64) {self.0.set_speed(speed)}
@@ -147,7 +244,17 @@ impl traits::Player for Player {
     fn volume(&self) -> f64 {self.0.volume()}
     fn seek(&self, position: Duration) {self.0.seek(position)}
     fn position(&self) -> Duration {self.0.position()}
-    fn duration(&self) -> Option<Duration> {self.0.duration()}
+    fn duration(&self) -> Duration {self.0.duration()}
     fn is_playing(&self) -> bool {self.0.is_playing()}
-    fn frame(&self) -> Option<Image> {self.0.frame()}
+    fn error(&self) -> Option<String> {self.0.error()}
+    fn frame(&self) -> Frame {Self::from_frame(self.0.frame())}
+    fn next(&mut self) -> traits::BoxFuture<'_, Frame> {
+        Box::pin(async move {Self::from_frame(self.0.next().await)})
+    }
 }
+
+#[derive(Clone)]
+struct Keyboard {
+    _session: maverick_os::Keyboard,
+}
+impl traits::Keyboard for Keyboard {}
