@@ -20,6 +20,7 @@ pub trait Sharable: Clone + Debug + Send + Sync + 'static {
     type Request: Send + 'static;
     type Response: Clone + Send + Sync + 'static;
 
+    fn capacity() -> usize {1024}
     fn name() -> &'static str {std::any::type_name::<Self>()}
     fn init(init: Self::Init) -> impl Future<Output = Self> + Send;
     fn handle(&mut self, request: Self::Request) -> impl Future<Output = Self::Response> + Send;
@@ -88,6 +89,7 @@ impl<S: Sharable> native::Sharable for State<S> {
     type Request = S::Request;
     type Response = S::Response;
 
+    fn capacity() -> usize {S::capacity()}
     fn key(init: &Init<S>) -> native::Key {init.key}
     fn cache_key(init: &Init<S>) -> Option<String> {
         init.restore.map(|_| format!("{}:{:016x}", S::name(), init.key.1))

@@ -5,28 +5,33 @@
 - Read and apply the current file for every request and after context compaction. Review changed code against it before finishing.
 - This is the canonical coding guide and supersedes older AGENT.rs copies.
 - Record user-provided coding advice as general rules for future work. Keep project-specific requirements in project documentation and write rules without author prefixes.
+- Deploying a crate means bumping its version, pushing the release to GitHub, and publishing it with Cargo.
 - Consolidate duplicate guidance. Ask about conflicting instructions rather than silently choosing.
 
 ## Structure and design
 
-- Order files as imports, statics, aliases/supporting types, data structures, traits, then behavioral structures.
+- Order files as imports, statics, module-level type aliases, data structures, traits, then behavioral structures.
 - Order the header as external dependency imports, standard-library imports, imports from elsewhere in the crate, then child file-module declarations (`mod`).
 - Place imports and re-exports from each child module directly below its `mod` declaration, not in the preceding crate-import group.
-- Place every static immediately below the import/module header at the top of the public section, regardless of its visibility. Keep its actual visibility unchanged; prominent placement makes its wider effects easier to see.
-- Keep structures with only data and small helper methods in a section below types and above traits.
-- Except for statics, put public definitions first, then private definitions in a separate second section.
+- Place every static immediately below the import/module header, regardless of its visibility. Keep its actual visibility unchanged; prominent placement makes its wider effects easier to see.
+- Place every module-level type alias immediately below statics, regardless of its visibility. Keep its visibility unchanged; these definitions are essential to understanding the file and must not be buried in the private section. This placement also applies to aliases used only by one trait implementation.
+- Keep structures with only data and simple getters below type aliases and above traits. Structures with behavior beyond getters belong after traits in their public or private section, together with their implementations.
+- Except for statics and module-level type aliases, put public definitions first, then private definitions in a separate second section.
 - Apply the same definition and implementation ordering within both sections.
 - Keep each structure followed by its implementations, except those grouped under a trait below.
 - Place each service beside the state and helper types it owns rather than grouping unrelated states separately from their services.
-- Place types used only by one trait implementation directly above the implementing structure. Order them to match the corresponding associated types in that implementation.
+- Place supporting structs and enums used only by one trait implementation directly above the implementing structure. Order them to match the corresponding associated types in that implementation.
 - Put traits without implementations first in the traits section, before traits with implementations.
-- Place all implementations of each trait directly below its definition, including blanket impls.
+- Place trait implementations directly below the implemented trait's definition. For a blanket implementation of one trait for any type implementing another trait, place it below the bound trait instead; for example, place `impl<T: Source> Target for T` directly below `Source`.
+- Order methods in each trait implementation to match their order in the trait definition.
 - Never write free-standing functions. Put behavior and constructors in associated methods or trait implementations on their owning types.
 - Treat extra parameters, types, helpers, shared pointers, and abstractions as costly. Prefer direct methods.
 - Before creating a new file or introducing a new structure, ask an explicit question and receive approval. Explain its purpose and effect on the interface so additions remain understandable; general task approval alone does not approve these additions.
 - Reuse existing library adapters instead of duplicating them in helper structures; keep cohesive state directly in its owner when possible.
 - When many values travel together, model the state they represent instead of passing them separately.
-- Design data structures to represent only necessary possibilities; remove optional state when absence no longer has a purpose.
+- Design data structures and API inputs to represent only supported, necessary possibilities; remove optional state when absence no longer has a purpose.
+- Use enums for finite choices instead of strings or other broad input types with unsupported values. Prefer compile-time validation and exhaustive handling whenever the type system can express the constraint.
+- Keep configuration specific to an enum variant in that variant, rather than accepting separate parameters that other variants ignore.
 - Extract a helper only when it is reused and names a problem of its own; prefer methods.
 - Do not split one operation into wrapper types or a sequence of one-step setup methods.
 - Prefer direct constructor parameters over traits added only to normalize constructor signatures.
@@ -55,10 +60,10 @@
 - Keep trait APIs minimal; require only essential information and avoid associated types for return types fixed by Self.
 - Prefer parameterless marker attributes when behavior uses a fixed method name.
 - Keep related API names consistent in prefix and word order.
+- Name command-line interface structures `Cli` and refer to them through their owning module paths.
 - Keep corresponding frontend and backend APIs aligned in ownership, names, parameters, and behavior. Ask for explicit approval before introducing a difference.
 - Resolve higher-level configuration in the owner and pass only required inputs to its implementations.
 - Collection-gathering methods return collections instead of accepting mutable output vectors.
-- Combine a fixed set of collections with an array followed by into_iter().flatten().collect().
 - Generate related macro variants from one recursive declaration instead of manually listing repetitive invocations.
 
 ## Formatting
@@ -87,6 +92,8 @@
 - Keep demos in the library crate's `src/main.rs`, self-contained and focused on the public API.
 - Do not create separate demo projects or extra example files. Reuse application setup provided by the framework.
 - Keep layout, rendering, input, and platform responsibilities with their appropriate owners.
+- In CLI tools, keep authored user-visible wording in `cli.rs` files. Working logic propagates structured errors and context upward; the CLI chooses how to describe them and drives the user interaction.
+- Present CLI setup as short, clearly separated steps with descriptive prompts. Display clickable links to setup pages instead of opening them automatically, and keep redirected output readable as plain text.
 - Keep framework-wide coordination queries internal rather than exposing them on public resource handles.
 - Make controls interactive throughout their intended layout area, including assigned padding, independently of the size of their visible content.
 - Use statics and global OnceLock bindings only as a last resort. Prefer context-owned, clonable capability handles and pass dependencies explicitly.
@@ -127,7 +134,7 @@
 
 ## Validation and reliability
 
-- Define one input format and validate it at the boundary, not repeatedly throughout consumers.
+- Define one input format and validate external data at the boundary, converting it to supported typed values before passing it to internal APIs. Keep unavoidable runtime parsing at that boundary rather than accepting unvalidated values throughout consumers.
 - Do not guard against values the platform cannot produce; raise real input-design problems instead.
 - Use recoverable errors only for realistically expected failures that callers can recover from. Panic on violated invariants, programming mistakes, and states so unlikely in intended use that they indicate a bug.
 - Do not make APIs fallible or add recovery paths solely for theoretical limits outside realistic use.

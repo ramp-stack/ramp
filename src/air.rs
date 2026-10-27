@@ -1,52 +1,49 @@
 use air::{
-    DefaultResolver, Id, Identity, Inbox, Location, Name, Output, Request, RequestType, Resolver,
+    DefaultResolver, Id, Identity, Location, Name, Output, Request, RequestType, Resolver,
     Response, Secret,
 };
 use air_server::Client;
 use crossfire::{AsyncRx, spsc};
 use futures::{StreamExt, stream::FuturesUnordered};
-use maverick_os::{Hardware, Notify, PushDestination};
+use maverick_os::{Hardware, Notify};
 use maverick_os::shared::{Service, Services};
-use prism::air::{ContractType, Instance as PrismInstance, Request as Message, Value};
+use prism::air::{ContractType, Request as Message, Value};
 use prism::service::{ServiceInit, Key};
 use prism::traits::{self, ContractUpdate, DynInstance, DynInstances, DynPending, Update};
-use serde::{Serialize, Serializer, Deserializer};
-use serde::de::{DeserializeSeed, SeqAccess, Visitor, Error as DeError};
+use serde::{Serialize, Serializer, Deserialize};
 use tokio::sync::{Mutex, OnceCell};
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque, hash_map::Entry};
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::notifications::{Notification as PushMessage, Notifications};
+use crate::notifications::{Action, Push, Subscription};
 use crate::shared::{Sharable, Shared, Snapshot};
+
+type InstanceResponse = (
+    Option<ContractUpdate>, Option<Request>, Vec<(Pending, Value, bool)>, Vec<Action>,
+);
+type AirResponse = (Option<Location>, HashMap<RequestType, Request>);
 
 #[derive(Clone)]
 pub struct Air {
+    state: Shared<AirState>,
     secret: Secret,
     network: Arc<Network>,
-    notifications: Option<PrismInstance<Notifications>>,
+    notifications: Option<Box<Instance>>,
     notify: Notify,
 }
 impl Air {
     pub fn new(secret: Secret, hardware: &Hardware) -> Self {
         let mut air = Self {
+            state: Shared::new(secret.clone()),
             secret, network: Arc::new(Network::default()), notifications: None,
             notify: hardware.notifier(),
         };
-        Services::start::<InboxService>(air.clone());
-        if let Some(application) = option_env!("RAMP_NOTIFICATION_APPLICATION") {
-            let context = prism::air::Air::new(air.clone());
-            let instance = context.instances::<Notifications>()
-                .create((hardware.device_id().to_owned(), application.parse().unwrap()));
-            instance.share(Notifications::server());
-            Services::start::<Push>(Push {
-                instance: instance.clone(), destination: Box::pin(hardware.push_destination()),
-            });
-            air.notifications = Some(instance);
-        }
+        Services::start::<AirService>(air.clone());
+        air.notifications = Push::start(&air, hardware).map(Box::new);
         air
     }
 }
@@ -56,26 +53,8 @@ impl Debug for Air {
     }
 }
 impl Air {
-    fn notify(&self, notification: Notification) {
-        match (notification, self.notifications.clone()) {
-            (Notification::Local, _) => {
-                self.notify.notify("New activity", "You have a notification.");
-            }
-            (Notification::Watch(id, key, server), Some(mut instance)) => {
-                if instance.pending().files.get(&id) != Some(&(key, server)) {
-                    instance.send(PushMessage::Watch(id, key, server));
-                }
-            }
-            (Notification::Received(id, key, server), Some(mut instance)) => {
-                if instance.pending().files.get(&id) == Some(&(key, server)) {
-                    instance.send(PushMessage::Received(id, key, server));
-                }
-            }
-            (Notification::Remove(id), Some(mut instance)) => {
-                if instance.pending().files.contains_key(&id) {instance.send(PushMessage::Remove(id));}
-            }
-            (_, None) => {}
-        }
+    fn notify(&self, notification: Action) {
+        Push::notify(self.notifications.as_deref(), &self.notify, notification);
     }
     async fn resolve(&self, name: Name, timestamp: Option<u64>) -> Arc<Identity> {
         self.network.resolver.lock().await.resolve(name, timestamp).await
@@ -120,51 +99,22 @@ impl Responses {
 }
 
 #[derive(Clone, Debug)]
-enum Notification {
-    Local, Watch(Id, air::PublicKey, Name), Received(Id, air::PublicKey, Name), Remove(Id),
-}
-
-#[derive(Clone, Debug)]
-struct Instances(Shared<InstancesState>);
-impl Instances {
-    fn new(air: Air, contract: ContractType) -> Self {
-        let init = InstancesInit(air, contract);
-        let state = Shared::local(init.clone());
-        Services::start::<InstancesService>(init);
-        Self(state)
-    }
-}
-impl DynInstances for Instances {
-    fn create(&self, init: Message) -> Box<dyn DynInstance> {
-        Box::new(self.0.update(InstancesRequest::Create(init)))
-    }
-    fn list(&self) -> HashMap<Id, Box<dyn DynInstance>> {
-        self.0.load().0.iter().map(|(id, instance)| {
-            (*id, Box::new(instance.clone()) as Box<dyn DynInstance>)
-        }).collect()
-    }
-    fn try_next(&mut self) -> Option<Box<dyn DynInstance>> {
-        self.0.try_next().map(|instance| Box::new(instance) as Box<dyn DynInstance>)
-    }
-    fn next(&mut self) -> traits::BoxFuture<'_, Box<dyn DynInstance>> {
-        Box::pin(async {Box::new(self.0.next().await) as Box<dyn DynInstance>})
-    }
-}
-
-#[derive(Clone, Debug)]
-struct Instance(Shared<InstanceState>, Shared<InboxState>, Air);
+pub struct Instance(Shared<InstanceState>, Air);
 impl Instance {
+    pub fn create<C: air::Contract>(air: Air, init: C::Init) -> Self {
+        Instances::new(air, ContractType::new::<C>()).0
+            .update(InstancesRequest::Create(Box::new(init))).unwrap()
+    }
     fn open(init: InstanceInit) -> Self {
-        let inbox = Shared::new(init.air.secret.clone());
         let air = init.air.clone();
-        Self(Shared::restore(init, InstanceState::restore), inbox, air)
+        Self(Shared::restore(init, InstanceState::restore), air)
     }
 }
 impl DynInstance for Instance {
     fn id(&self) -> Id {self.0.clone().load().instance.id()}
     fn notify(&self, enabled: bool) {
         let notifications = self.0.update(InstanceRequest::Notify(enabled)).3;
-        for notification in notifications {self.2.notify(notification);}
+        for notification in notifications {self.1.notify(notification);}
     }
     fn send(&mut self, message: Message) -> Box<dyn DynPending> {
         match self.0.update(InstanceRequest::Send(message)).0 {
@@ -174,7 +124,7 @@ impl DynInstance for Instance {
     }
     fn share(&self, name: Name) {
         let location = self.0.clone().load().instance.location();
-        self.1.update(InboxRequest::Share(self.2.clone(), name, location));
+        self.1.state.update(AirRequest::Share(self.1.clone(), name, location));
     }
     fn pending(&self) -> Box<dyn traits::DynRef + '_> {
         Box::new(Snapshot(self.0.load(), |state| state.instance.pending().unwrap()))
@@ -195,6 +145,41 @@ impl DynInstance for Instance {
 }
 
 #[derive(Clone, Debug)]
+struct Instances(Shared<InstancesState>);
+impl Instances {
+    fn new(air: Air, contract: ContractType) -> Self {
+        let init = InstancesInit(air, contract);
+        let state = Shared::local(init.clone());
+        Services::start::<InstancesService>(init);
+        Self(state)
+    }
+}
+impl DynInstances for Instances {
+    fn create(&self, init: Message) -> Box<dyn DynInstance> {
+        Box::new(self.0.update(InstancesRequest::Create(init)).unwrap())
+    }
+    fn list(&self) -> HashMap<Id, Box<dyn DynInstance>> {
+        self.0.load().0.iter().map(|(id, instance)| {
+            (*id, Box::new(instance.clone()) as Box<dyn DynInstance>)
+        }).collect()
+    }
+    fn try_next(&mut self) -> Option<Box<dyn DynInstance>> {
+        loop {
+            if let Some(instance) = self.0.try_next()? {return Some(Box::new(instance))}
+        }
+    }
+    fn next(&mut self) -> traits::BoxFuture<'_, Box<dyn DynInstance>> {
+        Box::pin(async {
+            loop {
+                if let Some(instance) = self.0.next().await {
+                    return Box::new(instance) as Box<dyn DynInstance>
+                }
+            }
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
 struct Pending(Shared<PendingState>);
 impl Pending {
     fn new(value: Value) -> Self {Self(Shared::temporary(value))}
@@ -211,8 +196,6 @@ impl DynPending for Pending {
     fn try_next(&mut self) -> Option<bool> {self.0.try_next()}
     fn next(&mut self) -> traits::BoxFuture<'_, bool> {Box::pin(self.0.next())}
 }
-
-type Predicate<'a, P> = traits::BoxFuture<'a, P>;
 
 #[derive(Clone)]
 struct PendingState(Value, bool);
@@ -244,12 +227,12 @@ struct InstancesState(HashMap<Id, Instance>, Air, ContractType);
 impl Sharable for InstancesState {
     type Init = InstancesInit;
     type Request = InstancesRequest;
-    type Response = Instance;
+    type Response = Option<Instance>;
 
     async fn init(init: InstancesInit) -> Self {
-        let inbox: Shared<InboxState> = Shared::new(init.0.secret.clone());
+        let catalog = init.0.state.clone();
         // Restore local content before exposing the first snapshot; services handle network sync.
-        let instances = inbox.load().0.list(&init.1.id).into_iter().filter_map(|location| {
+        let instances = catalog.load().0.list(&init.1.id).into_iter().filter_map(|location| {
             let instance = Instance::open(InstanceInit {
                 air: init.0.clone(), contract: init.1, location,
             });
@@ -258,79 +241,52 @@ impl Sharable for InstancesState {
         }).collect();
         Self(instances, init.0, init.1)
     }
-    async fn handle(&mut self, request: Self::Request) -> Instance {
+    async fn handle(&mut self, request: Self::Request) -> Option<Instance> {
         match request {
             InstancesRequest::Create(value) => {
                 let location = (self.2.location)(&self.1.secret, &value);
-                self.0.entry(Id::hash(&location)).or_insert_with(|| {
+                Some(self.0.entry(Id::hash(&location)).or_insert_with(|| {
                     let init = InstanceInit {air: self.1.clone(), contract: self.2, location};
                     let instance = Instance::open(init.clone());
-                    instance.0.update(InstanceRequest::Initialize(self.1.clone(), self.2, value));
+                    instance.1.state.update(AirRequest::Create(self.1.clone(), self.2, value));
                     Services::start::<InstanceService>(init);
-                    instance.1.update(InboxRequest::Share(self.1.clone(), self.1.secret.name(), location));
                     instance
-                }).clone()
+                }).clone())
             }
-            InstancesRequest::Received(instance) => self.0.entry(instance.id()).or_insert(instance).clone(),
+            InstancesRequest::Received(instance) => match self.0.entry(instance.id()) {
+                Entry::Vacant(entry) => Some(entry.insert(instance).clone()),
+                Entry::Occupied(_) => None,
+            },
         }
     }
 }
 
-enum InstancesPredicate {Received(Location), Initialized(Id)}
-
 struct InstancesService {
-    inbox: Shared<InboxState>,
-    instances: Shared<InstancesState>,
-    pending: HashMap<Id, Instance>,
+    catalog: Shared<AirState>,
     init: InstancesInit,
 }
 impl Service for InstancesService {
     type Init = InstancesInit;
-    type Predicate = InstancesPredicate;
+    type Predicate = Location;
 
     async fn init(init: InstancesInit) -> Self {
-        let inbox: Shared<InboxState> = Shared::new(init.0.secret.clone());
-        let instances = Shared::local(init.clone());
-        let locations = inbox.load().0.list(&init.1.id);
-        let mut service = Self {inbox, instances, pending: HashMap::new(), init};
-        for location in locations {service.handle(InstancesPredicate::Received(location)).await;}
+        let catalog = init.0.state.clone();
+        let locations = catalog.load().0.list(&init.1.id);
+        let mut service = Self {catalog, init};
+        for location in locations {service.handle(location).await;}
         service
     }
-    async fn predicate(&mut self) -> InstancesPredicate {
-        let mut predicates: FuturesUnordered<Predicate<'_, InstancesPredicate>> = self.pending
-            .iter_mut().map(|(id, instance)| Box::pin(async move {
-                loop {
-                    if instance.0.load().instance.pending().is_some() {
-                        return InstancesPredicate::Initialized(*id)
-                    }
-                    instance.0.next().await;
-                }
-            }) as Predicate<'_, InstancesPredicate>).collect();
-        predicates.push(Box::pin(async {
-            loop {
-                if let Some(location) = self.inbox.next().await.0 {
-                    if location.contract == self.init.1.id {return InstancesPredicate::Received(location)}
-                }
-            }
-        }));
-        predicates.next().await.unwrap()
-    }
-    async fn handle(&mut self, predicate: InstancesPredicate) {
-        match predicate {
-            InstancesPredicate::Received(location) => {
-                let id = Id::hash(&location);
-                let init = InstanceInit {air: self.init.0.clone(), contract: self.init.1, location};
-                Services::start::<InstanceService>(init.clone());
-                if self.instances.load().0.contains_key(&id) || self.pending.contains_key(&id) {return}
-                let instance = Instance::open(init);
-                if instance.0.load().instance.pending().is_some() {
-                    self.instances.update(InstancesRequest::Received(instance));
-                } else {self.pending.insert(id, instance);}
-            }
-            InstancesPredicate::Initialized(id) => {
-                self.instances.update(InstancesRequest::Received(self.pending.remove(&id).unwrap()));
+    async fn predicate(&mut self) -> Location {
+        loop {
+            if let Some(location) = self.catalog.next().await.0 {
+                if location.contract == self.init.1.id {return location}
             }
         }
+    }
+    async fn handle(&mut self, location: Location) {
+        Services::start::<InstanceService>(InstanceInit {
+            air: self.init.0.clone(), contract: self.init.1, location,
+        });
     }
 }
 
@@ -345,54 +301,26 @@ impl Hash for InstanceInit {
 }
 
 enum InstanceRequest {
-    Start, Request, Notify(bool), Initialize(Air, ContractType, Message),
+    Start, Request, Notify(bool), Initialize(Box<dyn traits::DynContract>),
     Send(Message), Response(Air, air::PublicKey, Response),
-}
-
-type InstanceResponse = (
-    Option<ContractUpdate>, Option<Request>, Vec<(Pending, Value, bool)>, Vec<Notification>,
-);
-
-struct ContractRestore(ContractType);
-impl<'de> DeserializeSeed<'de> for ContractRestore {
-    type Value = Box<dyn traits::DynContract>;
-    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
-        let mut erased = <dyn erased_serde::Deserializer>::erase(deserializer);
-        Ok((self.0.restore)(&mut erased))
-    }
-}
-
-struct Restore(ContractType);
-impl<'de> DeserializeSeed<'de> for Restore {
-    type Value = InstanceState;
-    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<InstanceState, D::Error> {
-        deserializer.deserialize_tuple(2, self)
-    }
-}
-impl<'de> Visitor<'de> for Restore {
-    type Value = InstanceState;
-    fn expecting(&self, f: &mut Formatter<'_>) -> FmtResult {f.write_str("Air state and pending count")}
-    fn visit_seq<A: SeqAccess<'de>>(self, mut sequence: A) -> Result<InstanceState, A::Error> {
-        let instance = sequence.next_element_seed(ContractRestore(self.0))?
-            .ok_or_else(|| A::Error::custom("Missing Air state"))?;
-        let pending: usize = sequence.next_element()?
-            .ok_or_else(|| A::Error::custom("Missing pending count"))?;
-        Ok(InstanceState {
-            instance, pending: (0..pending).map(|_| None).collect(), live: false, notify: false,
-        })
-    }
 }
 
 #[derive(Clone, Debug)]
 struct InstanceState {
     instance: Box<dyn traits::DynContract>,
     pending: VecDeque<Option<Pending>>,
-    live: bool,
-    notify: bool,
+    notifications: Subscription,
 }
 impl InstanceState {
     fn restore(init: &InstanceInit, bytes: &[u8]) -> Self {
-        Restore(init.contract).deserialize(&mut postcard::Deserializer::from_bytes(bytes)).unwrap()
+        // Postcard tuples store their fields consecutively without framing.
+        let mut deserializer = postcard::Deserializer::from_bytes(bytes);
+        let instance = (init.contract.restore)(
+            &mut <dyn erased_serde::Deserializer>::erase(&mut deserializer),
+        );
+        let pending = usize::deserialize(&mut deserializer).unwrap();
+        let notifications = Subscription::new(instance.id());
+        Self {instance, pending: (0..pending).map(|_| None).collect(), notifications}
     }
 }
 impl Serialize for InstanceState {
@@ -401,39 +329,32 @@ impl Serialize for InstanceState {
     }
 }
 impl Sharable for InstanceState {
-    // Preserve the persisted namespace from before the AIR modules were consolidated.
-    fn name() -> &'static str {"ramp2::air::instances::InstanceState"}
-
     type Init = InstanceInit;
     type Request = InstanceRequest;
     type Response = InstanceResponse;
 
+    // Preserve the persisted namespace from before the AIR modules were consolidated.
+    fn name() -> &'static str {"ramp2::air::instances::InstanceState"}
     async fn init(init: InstanceInit) -> Self {
-        let instance = (init.contract.create)(init.air.secret.clone(), init.location, None);
-        Self {instance, pending: VecDeque::new(), live: false, notify: false}
+        let instance = (init.contract.receive)(init.air.secret.clone(), init.location);
+        let notifications = Subscription::new(instance.id());
+        Self {instance, pending: VecDeque::new(), notifications}
     }
     async fn handle(&mut self, request: InstanceRequest) -> InstanceResponse {
         let mut pending = vec![];
-        let mut notifications = vec![];
         let update = match request {
             InstanceRequest::Start => {
-                self.live = false;
+                self.notifications.start();
                 return (None, Some(self.instance.start()), vec![], vec![])
             }
             InstanceRequest::Request => return (None, self.instance.request(), vec![], vec![]),
             InstanceRequest::Notify(enabled) => {
-                self.notify = enabled;
-                if !enabled {notifications.push(Notification::Remove(self.instance.id()));}
-                else if self.live && let Some((key, server)) = self.instance.subscription() {
-                    notifications.push(Notification::Watch(self.instance.id(), key, server));
-                }
+                let notifications = self.notifications.notify(enabled, self.instance.subscription());
                 return (None, None, vec![], notifications)
             }
-            InstanceRequest::Initialize(air, contract, value) => {
-                if self.instance.pending().is_none() {
-                    self.instance = (contract.create)(air.secret, self.instance.location(), Some(value));
-                }
-                return (None, None, vec![], notifications)
+            InstanceRequest::Initialize(instance) => {
+                if self.instance.pending().is_none() {self.instance = instance;}
+                return (None, None, vec![], vec![])
             }
             InstanceRequest::Send(message) => {
                 let pending = Pending::new(self.instance.send(message));
@@ -442,50 +363,33 @@ impl Sharable for InstanceState {
             }
             InstanceRequest::Response(air, key, response) => {
                 let output = self.instance.response(&air, response).await;
-                if self.notify && self.live {
-                    if matches!(output, Output::Read(_, _)) {notifications.push(Notification::Local);}
-                    if matches!(output, Output::Read(_, _) | Output::Created(_, _)) {
-                        notifications.push(Notification::Received(
-                            self.instance.id(), key, self.instance.location().server,
-                        ));
-                    }
-                }
+                let notifications = self.notifications.response(
+                    &output, (key, self.instance.location().server), self.instance.subscription(),
+                );
                 let (results, update) = match output {
-                    Output::Init(results) => (results, Update::Init),
+                    Output::Init(results) => (results, Some(Update::Init)),
                     Output::Created(result, results) => {
                         if let Some(Some(handle)) = self.pending.pop_front() {
                             pending.push((handle, result.clone(), true));
                         }
-                        (results, Update::Confirmed(result))
+                        (results, Some(Update::Confirmed(result)))
                     }
-                    Output::Read(result, results) => (results, Update::Confirmed(result)),
-                    Output::Subscribed => {
-                        self.live = true;
-                        let Some((key, server)) = self.instance.subscription() else {
-                            return (None, None, vec![], notifications)
-                        };
-                        if self.notify {
-                            notifications.push(Notification::Watch(self.instance.id(), key, server));
-                        }
-                        else {notifications.push(Notification::Remove(self.instance.id()));}
-                        return (None, None, vec![], notifications)
-                    }
-                    Output::Garbage => return (None, None, vec![], notifications),
+                    Output::Read(result, results) => (results, Some(Update::Confirmed(result))),
+                    Output::Subscribed | Output::Garbage => (vec![], None),
                 };
                 for (result, handle) in results.into_iter().zip(&self.pending) {
                     if let Some(handle) = handle {pending.push((handle.clone(), result, false));}
                 }
-                update
+                return (update, self.instance.request(), pending, notifications)
             }
         };
-        (Some(update), None, pending, notifications)
+        (Some(update), None, pending, vec![])
     }
 }
 
-enum InstancePredicate {Response(Response), Changed}
-
 struct InstanceService {
     instance: Shared<InstanceState>,
+    instances: Shared<InstancesState>,
     responses: Responses,
     server: Name,
     file: air::PublicKey,
@@ -493,31 +397,40 @@ struct InstanceService {
 }
 impl Service for InstanceService {
     type Init = InstanceInit;
-    type Predicate = InstancePredicate;
+    type Predicate = InstanceRequest;
 
     async fn init(init: Self::Init) -> Self {
         let server = init.location.server;
         let air = init.air.clone();
+        let instances = Shared::local(InstancesInit(air.clone(), init.contract));
         let instance: Shared<InstanceState> = Shared::restore(init, InstanceState::restore);
+        if instance.load().instance.pending().is_some() {
+            instances.update(InstancesRequest::Received(Instance(instance.clone(), air.clone())));
+        }
         let request = instance.update(InstanceRequest::Start).1.unwrap();
         let file = match &request {Request::Read(key) => *key, Request::Create(signed) => signed.key};
         let responses = air.send(server, request).await;
-        Self {instance, responses, server, file, air}
+        Self {instance, instances, responses, server, file, air}
     }
-    async fn predicate(&mut self) -> InstancePredicate {
+    async fn predicate(&mut self) -> InstanceRequest {
         tokio::select! {
-            response = self.responses.next() => InstancePredicate::Response(response),
-            _ = self.instance.next() => InstancePredicate::Changed,
+            response = self.responses.next() => {
+                InstanceRequest::Response(self.air.clone(), self.file, response)
+            }
+            _ = self.instance.next() => InstanceRequest::Request,
         }
     }
-    async fn handle(&mut self, predicate: InstancePredicate) {
-        if let InstancePredicate::Response(response) = predicate {
-            let request = InstanceRequest::Response(self.air.clone(), self.file, response);
-            let (_, _, pending, notifications) = self.instance.update(request);
-            for (handle, result, confirmed) in pending {handle.update(result, confirmed);}
-            for notification in notifications {self.air.notify(notification);}
+    async fn handle(&mut self, request: InstanceRequest) {
+        let (update, request, pending, notifications) = self.instance.update(request);
+        for (handle, result, confirmed) in pending {handle.update(result, confirmed);}
+        if matches!(update, Some(Update::Init)) {
+            self.instances.update(InstancesRequest::Received(Instance(
+                self.instance.clone(), self.air.clone(),
+            )));
         }
-        if let Some(request) = self.instance.update(InstanceRequest::Request).1 {
+        for notification in notifications {self.air.notify(notification);}
+
+        if let Some(request) = request {
             self.file = match &request {
                 Request::Read(key) => *key, Request::Create(signed) => signed.key,
             };
@@ -526,93 +439,76 @@ impl Service for InstanceService {
     }
 }
 
-enum InboxRequest {Start, Requests, Response(Air, RequestType, Response), Share(Air, Name, Location)}
-
-type InboxResponse = (Option<Location>, HashMap<RequestType, Request>);
+enum AirRequest {
+    Start, Requests, Response(Air, RequestType, Response),
+    Create(Air, ContractType, Message), Share(Air, Name, Location),
+}
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-struct InboxState(Inbox, Name);
-impl Sharable for InboxState {
-    // Preserve the persisted namespace from before the AIR modules were consolidated.
-    fn name() -> &'static str {"ramp2::air::instances::InboxState"}
-
+struct AirState(air::Air);
+impl Sharable for AirState {
     type Init = Secret;
-    type Request = InboxRequest;
-    type Response = InboxResponse;
+    type Request = AirRequest;
+    type Response = AirResponse;
 
     async fn init(secret: Secret) -> Self {
-        let name = secret.name();
-        Self(Inbox::new(secret).expect("Could not create the Air inbox"), name)
+        Self(air::Air::new(secret).expect("Could not create the Air state"))
     }
-    async fn handle(&mut self, request: InboxRequest) -> InboxResponse {
+    async fn handle(&mut self, request: AirRequest) -> AirResponse {
         let location = match request {
-            InboxRequest::Start => return (None, self.0.start()),
-            InboxRequest::Requests => return (None, self.0.requests()),
-            InboxRequest::Response(mut air, kind, response) => {
-                self.0.response(&mut air, kind, response).await.map(|(_, location)| location)
+            AirRequest::Start => return (None, self.0.start()),
+            AirRequest::Requests => return (None, self.0.requests()),
+            AirRequest::Response(mut air, kind, response) => {
+                let location = self.0.response(&mut air, kind, response).await;
+                return (location, self.0.requests())
             }
-            InboxRequest::Share(mut air, name, location) => {
-                let sent = self.0.send(&mut air, name, location).await;
-                (sent && name == self.1).then_some(location)
+            AirRequest::Create(air, contract, value) => {
+                let instance = (contract.create)(&mut self.0, value);
+                let location = instance.location();
+                let init = InstanceInit {air, contract, location};
+                let state = Shared::<InstanceState>::restore(init, InstanceState::restore);
+                state.update(InstanceRequest::Initialize(instance));
+                Some(location)
+            }
+            AirRequest::Share(mut air, name, location) => {
+                self.0.share(&mut air, name, location).await;
+                None
             }
         };
         (location, HashMap::new())
     }
 }
 
-enum InboxPredicate {Response(RequestType, Response), Changed}
-
-struct InboxService(Shared<InboxState>, HashMap<RequestType, Responses>, Air);
-impl Service for InboxService {
+struct AirService(Shared<AirState>, HashMap<RequestType, Responses>, Air);
+impl Service for AirService {
     type Init = Air;
-    type Predicate = InboxPredicate;
+    type Predicate = AirRequest;
 
     async fn init(air: Air) -> Self {
-        let inbox: Shared<InboxState> = Shared::new(air.secret.clone());
-        let requests = inbox.update(InboxRequest::Start).1;
+        let catalog = air.state.clone();
+        let requests = catalog.update(AirRequest::Start).1;
         let mut streams = HashMap::new();
         for (kind, request) in requests {streams.insert(kind, air.send(Name::orange_me(), request).await);}
-        Self(inbox, streams, air)
+        Self(catalog, streams, air)
     }
-    async fn predicate(&mut self) -> InboxPredicate {
-        let mut predicates: FuturesUnordered<Predicate<'_, InboxPredicate>> = self.1.iter_mut()
-            .map(|(kind, stream)| Box::pin(async move {
-                InboxPredicate::Response(*kind, stream.next().await)
-            }) as Predicate<'_, InboxPredicate>).collect();
-        predicates.push(Box::pin(async {self.0.next().await; InboxPredicate::Changed}));
-        predicates.next().await.unwrap()
-    }
-    async fn handle(&mut self, predicate: InboxPredicate) {
-        if let InboxPredicate::Response(kind, response) = predicate {
-            if !matches!(response, Response::Read(_, None)) {self.1.remove(&kind);}
-            self.0.update(InboxRequest::Response(self.2.clone(), kind, response));
+    async fn predicate(&mut self) -> AirRequest {
+        let mut responses: FuturesUnordered<_> = self.1.iter_mut()
+            .map(|(kind, stream)| async move {(*kind, stream.next().await)}).collect();
+
+        tokio::select! {
+            Some((kind, response)) = responses.next() => {
+                AirRequest::Response(self.2.clone(), kind, response)
+            }
+            _ = self.0.next() => AirRequest::Requests,
         }
-        for (kind, request) in self.0.update(InboxRequest::Requests).1 {
+    }
+    async fn handle(&mut self, request: AirRequest) {
+        if let AirRequest::Response(_, kind, response) = &request {
+            if !matches!(response, Response::Read(_, None)) {self.1.remove(kind);}
+        }
+        for (kind, request) in self.0.update(request).1 {
             self.1.insert(kind, self.2.send(Name::orange_me(), request).await);
         }
-    }
-}
-
-struct Push {
-    instance: PrismInstance<Notifications>,
-    destination: traits::BoxFuture<'static, PushDestination>,
-}
-impl Hash for Push {
-    fn hash<H: Hasher>(&self, hasher: &mut H) {self.instance.hash(hasher)}
-}
-impl Service for Push {
-    type Init = Self;
-    type Predicate = PushDestination;
-
-    async fn init(init: Self) -> Self {init}
-    async fn predicate(&mut self) -> PushDestination {self.destination.as_mut().await}
-    async fn handle(&mut self, destination: PushDestination) {
-        let push = match &destination {
-            PushDestination::Apns(token) => air_notifications::PushDestination::Apns(token.clone()),
-            PushDestination::Fcm(token) => air_notifications::PushDestination::Fcm(token.clone()),
-        };
-        self.instance.send(PushMessage::Destination(push));
-        self.destination = Box::pin(async move {destination.current().await});
     }
 }
 

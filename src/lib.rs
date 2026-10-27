@@ -1,18 +1,29 @@
-pub use air_notifications as notifications;
 pub use maverick_os;
 pub use prism;
 use ::air::Secret;
+use futures::{FutureExt, StreamExt};
+use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use maverick_os::inputs as native;
 use maverick_os::{Data, Hardware, LogicalWindow};
 use prism::events as event;
 
 pub mod air;
+pub mod notifications;
 pub mod hardware;
+mod native_text;
+use native_text::{Action, Selection};
 mod shared;
+mod player;
+pub use player::Player;
 mod renderer;
-pub use renderer::Renderer;
+pub use renderer::{Frame, Renderer};
 
-pub struct Ramp<A: prism::Application>(prism::Prism, std::marker::PhantomData<A>);
+pub struct Ramp<A: prism::Application> {
+    prism: prism::Prism,
+    sender: UnboundedSender<Action>,
+    receiver: UnboundedReceiver<Action>,
+    application: std::marker::PhantomData<A>,
+}
 impl<A: prism::Application> maverick_os::Application for Ramp<A> {
     type Renderer = Renderer;
 
@@ -20,52 +31,56 @@ impl<A: prism::Application> maverick_os::Application for Ramp<A> {
 
     fn new(hardware: Hardware, window: LogicalWindow) -> Self {
         let key = "ramp.air.identity";
-        let secret = match hardware.get_cache(key).expect("Could not read the Air identity") {
-            Some(Data::Text(saved)) => serde_json::from_str(&saved).expect("Invalid saved Air identity"),
-            Some(_) => panic!("The saved Air identity must be text"),
-            None => {
+        let secret = hardware.get_cache(key).and_then(|data| match data {
+            Data::Text(saved) => serde_json::from_str::<Secret>(&saved).ok(),
+            _ => None,
+        }).filter(|secret| secret.path().is_empty()
+            && secret.name().to_string() == secret.public(None).public_key().to_string())
+            .unwrap_or_else(|| {
                 let secret = Secret::new();
-                let saved = serde_json::to_string(&secret).expect("Could not encode the Air identity");
-                hardware.set_cache(key, &Data::Text(saved)).expect("Could not save the Air identity");
+                let saved = serde_json::to_string(&secret).unwrap();
+                if let Err(error) = hardware.set_cache(key, &Data::Text(saved)) {
+                    log::warn!("Could not save AIR identity: {error}");
+                }
                 secret
-            }
-        };
+            });
         let window = prism::Window {
-            size: window.size, insets: window.insets, keyboard_visible: window.keyboard_visible,
-            touch_controls: window.touch_controls,
+            size: window.size, insets: window.insets, is_mobile: window.is_mobile,
         };
         let air = prism::air::Air::new(air::Air::new(secret, &hardware));
         let prism = prism::Prism::new::<A, _>(hardware::Hardware(hardware), air, window);
-        Self(prism, std::marker::PhantomData)
+        let (sender, receiver) = mpsc::unbounded();
+        Self {prism, sender, receiver, application: std::marker::PhantomData}
     }
 
     fn on_input(&mut self, input: native::Input) {
+        self.drain_native();
         match input {
             native::Input::Notification(header, body) => {
-                self.0.on_event(event::Notification {header, body});
+                self.prism.on_event(event::Notification {header, body});
             }
-            native::Input::Media(media) => self.0.on_event(match media {
+            native::Input::Media(media) => self.prism.on_event(match media {
                 native::Media::Play => event::MediaEvent::Play,
                 native::Media::Pause => event::MediaEvent::Pause,
+                native::Media::Toggle => event::MediaEvent::Toggle,
                 native::Media::VolumeUp => event::MediaEvent::VolumeUp,
                 native::Media::VolumeDown => event::MediaEvent::VolumeDown,
             }),
             native::Input::Resized(window) => {
-                self.0.resize(prism::Window {
-                    size: window.size, insets: window.insets, keyboard_visible: window.keyboard_visible,
-                    touch_controls: window.touch_controls,
-                });
+                self.prism.on_event(event::WindowEvent::Resized(prism::Window {
+                    size: window.size, insets: window.insets, is_mobile: window.is_mobile,
+                }));
             }
             native::Input::WindowFocused(focused) => {
-                self.0.on_event(event::WindowEvent::Focused(focused));
+                self.prism.on_event(event::WindowEvent::Focused(focused));
                 if !focused {
-                    self.0.on_event(event::MouseEvent {position: None, state: event::MouseState::Moved});
+                    self.prism.on_event(event::MouseEvent {position: None, state: event::MouseState::Moved});
                 }
             }
-            native::Input::WindowMoved(x, y) => self.0.on_event(event::WindowEvent::Moved(x, y)),
-            native::Input::DroppedFile(path) => self.0.on_event(event::FileEvent::Dropped(path)),
-            native::Input::HoveredFile(path) => self.0.on_event(event::FileEvent::Hovered(path)),
-            native::Input::HoveredFileCancelled => self.0.on_event(event::FileEvent::Cancelled),
+            native::Input::WindowMoved(x, y) => self.prism.on_event(event::WindowEvent::Moved(x, y)),
+            native::Input::DroppedFile(path) => self.prism.on_event(event::FileEvent::Dropped(path)),
+            native::Input::HoveredFile(path) => self.prism.on_event(event::FileEvent::Hovered(path)),
+            native::Input::HoveredFileCancelled => self.prism.on_event(event::FileEvent::Cancelled),
             native::Input::Device(device, input) => match input {
                 native::DeviceInput::Keyboard(key, state, modifiers) => {
                     let key = match key {
@@ -100,7 +115,7 @@ impl<A: prism::Application> maverick_os::Application for Ramp<A> {
                         shift: modifiers.shift, control: modifiers.control,
                         alt: modifiers.alt, supermeta: modifiers.supermeta,
                     };
-                    self.0.on_event(event::KeyboardEvent {key, state, modifiers});
+                    self.action(Action::Keyboard(event::KeyboardEvent {key, state, modifiers}));
                 }
                 native::DeviceInput::Mouse(position, state) => {
                     let button = |button| match button {
@@ -114,21 +129,45 @@ impl<A: prism::Application> maverick_os::Application for Ramp<A> {
                         native::MouseState::Moved => event::MouseState::Moved,
                         native::MouseState::Scroll(x, y) => event::MouseState::Scroll(x, y),
                     };
-                    self.0.on_event(event::MouseEvent {position: Some(position), state});
+                    self.action(Action::Mouse(event::MouseEvent {position: Some(position), state}));
                 }
                 native::DeviceInput::CursorEntered => {
-                    self.0.on_event(event::CursorEvent {device, entered: true});
+                    self.prism.on_event(event::CursorEvent {device, entered: true});
                 }
                 native::DeviceInput::CursorLeft => {
-                    self.0.on_event(event::CursorEvent {device, entered: false});
-                    self.0.on_event(event::MouseEvent {position: None, state: event::MouseState::Moved});
+                    self.prism.on_event(event::CursorEvent {device, entered: false});
+                    self.prism.on_event(event::MouseEvent {position: None, state: event::MouseState::Moved});
                 }
             },
         }
     }
 
-    fn draw(&mut self) -> Vec<prism::drawable::Instruction> {self.0.draw()}
-    async fn changed(&mut self) {self.0.changed().await;}
+    fn draw(&mut self) -> Frame {Frame::new(self.prism.draw(), self.sender.clone())}
+    async fn changed(&mut self) {
+        futures::select_biased! {
+            action = self.receiver.next().fuse() => self.action(action.unwrap()),
+            _ = self.prism.changed().fuse() => {},
+        }
+        self.drain_native();
+    }
+}
+
+impl<A: prism::Application> Ramp<A> {
+    fn drain_native(&mut self) {
+        while let Ok(action) = self.receiver.try_recv() {self.action(action);}
+    }
+
+    fn action(&mut self, action: Action) {
+        match action {
+            Action::SetText(edit) => self.prism.on_event(edit),
+            Action::Selection {id, text, range} => {
+                assert!(text.is_char_boundary(range.start) && text.is_char_boundary(range.end));
+                self.prism.on_event(Selection {id, text, range});
+            }
+            Action::Keyboard(event) => self.prism.on_event(event),
+            Action::Mouse(event) => self.prism.on_event(event),
+        }
+    }
 }
 
 #[macro_export]
