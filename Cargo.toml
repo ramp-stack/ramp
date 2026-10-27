@@ -1,6 +1,6 @@
 [package]
 name = "ramp2"
-version = "3.0.0"
+version = "3.0.1"
 edition = "2024"
 license = "BSD-3-Clause"
 repository = "https://github.com/ramp-stack/ramp.git"
@@ -16,7 +16,7 @@ demo = []
 media = {package = "media2", version = "0.1.0", path = "../media"}
 include_dir = {version = "0.7.4"}
 maverick_os = {version = "5.0.0", path = "../maverick_os"}
-prism = {package = "prism2", version = "3.0.0", path = "../prism"}
+prism = {package = "prism2", version = "3.0.1", path = "../prism"}
 wgpu_prism = {version = "8.0.0", path = "../wgpu_prism", features = ["renderer"]}
 air = {version = "4.0.0", path = "../air"}
 air_notifications = {version = "0.2.0", path = "../air_notifications"}
