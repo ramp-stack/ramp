@@ -147,11 +147,11 @@ impl NativeText {
             clip.setHidden(false);
 
             if text.focused && (hidden || previous.as_ref().is_none_or(|old| !old.focused)) {
-                view.window().unwrap().makeFirstResponder(Some(&view));
-            } else if !text.focused && previous.as_ref().is_some_and(|old| old.focused) {
-                if view.is_first_responder() {
-                    view.window().unwrap().makeFirstResponder(Some(&self.parent));
-                }
+                view.window().unwrap().makeFirstResponder(Some(view));
+            } else if !text.focused && previous.as_ref().is_some_and(|old| old.focused)
+                && view.is_first_responder()
+            {
+                view.window().unwrap().makeFirstResponder(Some(&self.parent));
             }
             if let Some(cursor) = text.cursor {
                 let anchor = TextView::utf16_offset(&string, text.anchor.unwrap_or(cursor));

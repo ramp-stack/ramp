@@ -5,6 +5,8 @@ use std::any::TypeId;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 
+type Restore<S> = fn(&<S as Sharable>::Init, &[u8]) -> S;
+
 pub struct Snapshot<'a, S>(pub native::Ref<'a, S>, pub fn(&S) -> &(dyn std::any::Any + Send + Sync));
 impl<S> Debug for Snapshot<'_, S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -65,7 +67,7 @@ struct Init<S: Sharable> {
     key: native::Key,
     value: S::Init,
     serialize: Option<fn(&S) -> &dyn erased_serde::Serialize>,
-    restore: Option<fn(&S::Init, &[u8]) -> S>,
+    restore: Option<Restore<S>>,
 }
 impl<S: Sharable> Hash for Init<S> {
     fn hash<H: Hasher>(&self, hash: &mut H) {self.key.hash(hash)}

@@ -220,7 +220,7 @@ impl Hash for InstancesInit {
     fn hash<H: Hasher>(&self, hash: &mut H) {self.0.hash(hash); self.1.id.hash(hash);}
 }
 
-enum InstancesRequest {Create(Message), Received(Instance)}
+enum InstancesRequest {Create(Message), Received(Box<Instance>)}
 
 #[derive(Clone, Debug)]
 struct InstancesState(HashMap<Id, Instance>, Air, ContractType);
@@ -254,7 +254,7 @@ impl Sharable for InstancesState {
                 }).clone())
             }
             InstancesRequest::Received(instance) => match self.0.entry(instance.id()) {
-                Entry::Vacant(entry) => Some(entry.insert(instance).clone()),
+                Entry::Vacant(entry) => Some(entry.insert(*instance).clone()),
                 Entry::Occupied(_) => None,
             },
         }
@@ -278,9 +278,8 @@ impl Service for InstancesService {
     }
     async fn predicate(&mut self) -> Location {
         loop {
-            if let Some(location) = self.catalog.next().await.0 {
-                if location.contract == self.init.1.id {return location}
-            }
+            if let Some(location) = self.catalog.next().await.0
+                && location.contract == self.init.1.id {return location}
         }
     }
     async fn handle(&mut self, location: Location) {
@@ -302,7 +301,7 @@ impl Hash for InstanceInit {
 
 enum InstanceRequest {
     Start, Request, Notify(bool), Initialize(Box<dyn traits::DynContract>),
-    Send(Message), Response(Air, air::PublicKey, Response),
+    Send(Message), Response(Box<Air>, air::PublicKey, Response),
 }
 
 #[derive(Clone, Debug)]
@@ -362,7 +361,7 @@ impl Sharable for InstanceState {
                 Update::Pending(Box::new(pending) as Box<dyn DynPending>)
             }
             InstanceRequest::Response(air, key, response) => {
-                let output = self.instance.response(&air, response).await;
+                let output = self.instance.response(air.as_ref(), response).await;
                 let notifications = self.notifications.response(
                     &output, (key, self.instance.location().server), self.instance.subscription(),
                 );
@@ -405,7 +404,9 @@ impl Service for InstanceService {
         let instances = Shared::local(InstancesInit(air.clone(), init.contract));
         let instance: Shared<InstanceState> = Shared::restore(init, InstanceState::restore);
         if instance.load().instance.pending().is_some() {
-            instances.update(InstancesRequest::Received(Instance(instance.clone(), air.clone())));
+            instances.update(InstancesRequest::Received(Box::new(Instance(
+                instance.clone(), air.clone(),
+            ))));
         }
         let request = instance.update(InstanceRequest::Start).1.unwrap();
         let file = match &request {Request::Read(key) => *key, Request::Create(signed) => signed.key};
@@ -415,7 +416,7 @@ impl Service for InstanceService {
     async fn predicate(&mut self) -> InstanceRequest {
         tokio::select! {
             response = self.responses.next() => {
-                InstanceRequest::Response(self.air.clone(), self.file, response)
+                InstanceRequest::Response(Box::new(self.air.clone()), self.file, response)
             }
             _ = self.instance.next() => InstanceRequest::Request,
         }
@@ -424,9 +425,9 @@ impl Service for InstanceService {
         let (update, request, pending, notifications) = self.instance.update(request);
         for (handle, result, confirmed) in pending {handle.update(result, confirmed);}
         if matches!(update, Some(Update::Init)) {
-            self.instances.update(InstancesRequest::Received(Instance(
+            self.instances.update(InstancesRequest::Received(Box::new(Instance(
                 self.instance.clone(), self.air.clone(),
-            )));
+            ))));
         }
         for notification in notifications {self.air.notify(notification);}
 
@@ -503,9 +504,8 @@ impl Service for AirService {
         }
     }
     async fn handle(&mut self, request: AirRequest) {
-        if let AirRequest::Response(_, kind, response) = &request {
-            if !matches!(response, Response::Read(_, None)) {self.1.remove(kind);}
-        }
+        if let AirRequest::Response(_, kind, response) = &request
+            && !matches!(response, Response::Read(_, None)) {self.1.remove(kind);}
         for (kind, request) in self.0.update(request).1 {
             self.1.insert(kind, self.2.send(Name::orange_me(), request).await);
         }

@@ -28,7 +28,7 @@
 - Treat extra parameters, types, helpers, shared pointers, and abstractions as costly. Prefer direct methods.
 - Before creating a new file or introducing a new structure, ask an explicit question and receive approval. Explain its purpose and effect on the interface so additions remain understandable; general task approval alone does not approve these additions.
 - Reuse existing library adapters instead of duplicating them in helper structures; keep cohesive state directly in its owner when possible.
-- When many values travel together, model the state they represent instead of passing them separately.
+- Simplify APIs with long argument lists. When many values travel together, model the state they represent instead of passing them separately; discuss exceptional cases before retaining a long parameter list.
 - Design data structures and API inputs to represent only supported, necessary possibilities; remove optional state when absence no longer has a purpose.
 - Use enums for finite choices instead of strings or other broad input types with unsupported values. Prefer compile-time validation and exhaustive handling whenever the type system can express the constraint.
 - Keep configuration specific to an enum variant in that variant, rather than accepting separate parameters that other variants ignore.
@@ -45,6 +45,7 @@
 - Migrate dependency layers from the bottom up; place shared code below its consumers to avoid dependency cycles.
 - Keep shared contracts independent of their consumers and platform implementations. Convert layer-specific values at integration boundaries so reusing a contract does not require unrelated application code.
 - Use local path dependencies when developing related crates together. Version requirements are not mandatory; use registry or Git dependencies when those sources fit the workflow.
+- Remove unused dependencies and disable unused dependency features. Make dependencies used only by a particular feature optional and enable them through that feature.
 - Do not use pub(super) or pub(in ...). Allow pub(crate) only on associated `new` constructors for types constructed inside the crate and handed out through public APIs. Keep implementation fields private and expose deliberate pub APIs between modules.
 - Do not use `#[doc(hidden)]` to conceal public implementation details. Use actual privacy and module boundaries. If an item cannot be made private, explain which callers need it and why public access is required.
 - Prefer concrete types when implementations are known; add generics only for actual interchangeability. Keep input-only generic parameters on constructors or methods when the owner stores a concrete representation.
@@ -83,7 +84,7 @@
 - Put each field in a named-field struct definition on its own line; never combine fields to save space.
 - Group related values and chain operations; do not expand every element onto its own line.
 - Use blank lines for logical groups, not between every short method.
-- Do not add helpers, aliases, or temporary variables solely to shorten a clear expression.
+- Use concise, descriptive named types to resolve type-complexity warnings. Otherwise, do not add helpers, aliases, or temporary variables solely to shorten a clear expression.
 - Add code comments only to convey critical information that the code itself cannot clearly express.
 - Preserve this style when editing. Default rustfmt with max_width=100 does not enforce these rules.
 
@@ -152,6 +153,7 @@
 - Distinguish receipt from durable completion. Commit state changes and the results needed for recovery atomically.
 - Validate ownership when resuming an operation and prevent superseded owners from continuing to act.
 - For rendering and layout changes, verify transparency, clipping, and moving controls across their full range, including endpoints.
+- Always run `cargo clippy` for affected Rust crates before finishing code changes, covering the relevant targets and features. Address every warning; if a recommendation conflicts with this guide, ask before applying it or suppressing the warning.
 - Run necessary checks while working, then remove tests created for the task before finishing.
 - Run task virtual machines, simulators, and emulators in the background or on an unused desktop; do not cover the user's active workspace or take focus.
 - Shut down virtual machines, simulators, and emulators started for a task before finishing, unless explicitly asked to leave them running. Preserve instances that were already running before the task.

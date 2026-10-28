@@ -76,7 +76,7 @@ impl Demo {
     }
     fn rebuild(&mut self) {
         let fill = f32::INFINITY;
-        let list = Panel::new(false, (fill, fill), self.chats.iter().map(|(_, room)| {
+        let list = Panel::new(false, (fill, fill), self.chats.values().map(|room| {
             let room = room.pending();
             let name = format!("Chat {}", &room.id.to_string()[..6]);
             self.control(&name, Some(Action::Select(room.id)))
@@ -205,13 +205,13 @@ impl Demo {
                     }
                 });
             }
-            Action::Send => if let Some(mut room) = self.room() {
-                if !self.fields[1].is_empty() {
-                    room.send(ChatAction::SendMessage(std::mem::take(&mut self.fields[1])));
-                    self.scroll[1] = 0.0;
-                    self.error = ctx.hardware.set_cache("draft", &Data::Text(String::new()))
-                        .err().map(|error| format!("Saved draft was not cleared: {error}"));
-                }
+            Action::Send => if let Some(mut room) = self.room()
+                && !self.fields[1].is_empty()
+            {
+                room.send(ChatAction::SendMessage(std::mem::take(&mut self.fields[1])));
+                self.scroll[1] = 0.0;
+                self.error = ctx.hardware.set_cache("draft", &Data::Text(String::new()))
+                    .err().map(|error| format!("Saved draft was not cleared: {error}"));
             },
             Action::Scroll(index, delta, maximum) => {
                 self.scroll[index] = (self.scroll[index].clamp(0.0, maximum) + delta)
@@ -463,9 +463,8 @@ impl Drawable for Control {
 #[on_event]
 impl OnEvent<MouseEvent> for Control {
     fn on(&mut self, ctx: &mut Context, event: MouseEvent) -> Vec<Box<dyn DynEvent>> {
-        if event.position.is_some() && event.state == MouseState::Pressed(MouseButton::Left) {
-            if let Some(action) = &self.action {ctx.emit(action.clone());}
-        }
+        if event.position.is_some() && event.state == MouseState::Pressed(MouseButton::Left)
+            && let Some(action) = &self.action {ctx.emit(action.clone());}
         vec![]
     }
 }
