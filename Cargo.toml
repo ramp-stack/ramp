@@ -1,6 +1,6 @@
 [package]
 name = "ramp2"
-version = "3.0.2"
+version = "3.0.3"
 edition = "2024"
 license = "BSD-3-Clause"
 repository = "https://github.com/ramp-stack/ramp.git"
@@ -18,7 +18,7 @@ maverick_os = {version = "5.0.1", path = "../maverick_os"}
 prism = {package = "prism2", version = "3.1.0", path = "../prism"}
 wgpu_prism = {version = "8.0.1", path = "../wgpu_prism", features = ["renderer"]}
 air = {version = "4.0.1", path = "../air"}
-air_notifications = {version = "0.2.1", path = "../air_notifications"}
+air_notifications = {version = "0.2.2", path = "../air_notifications"}
 air_server = {version = "2.0.1", path = "../air_server"}
 crossfire = "3.1.7"
 futures = "0.3"

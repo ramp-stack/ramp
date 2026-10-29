@@ -318,13 +318,15 @@ impl InstanceState {
             &mut <dyn erased_serde::Deserializer>::erase(&mut deserializer),
         );
         let pending = usize::deserialize(&mut deserializer).unwrap();
-        let notifications = Subscription::new(instance.id());
+        let enabled = bool::deserialize(&mut deserializer).unwrap();
+        let mut notifications = Subscription::new(instance.id());
+        notifications.notify(enabled, None);
         Self {instance, pending: (0..pending).map(|_| None).collect(), notifications}
     }
 }
 impl Serialize for InstanceState {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        (&self.instance, self.pending.len()).serialize(serializer)
+        (&self.instance, self.pending.len(), self.notifications.enabled()).serialize(serializer)
     }
 }
 impl Sharable for InstanceState {
@@ -332,8 +334,6 @@ impl Sharable for InstanceState {
     type Request = InstanceRequest;
     type Response = InstanceResponse;
 
-    // Preserve the persisted namespace from before the AIR modules were consolidated.
-    fn name() -> &'static str {"ramp2::air::instances::InstanceState"}
     async fn init(init: InstanceInit) -> Self {
         let instance = (init.contract.receive)(init.air.secret.clone(), init.location);
         let notifications = Subscription::new(instance.id());

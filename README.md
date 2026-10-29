@@ -65,12 +65,17 @@ instance.notify(true);
 instance.notify(false);
 ```
 
-Notifications default to false when an instance is opened. The flag is shared by all clones of
+Notifications default to false for new instances. The flag is shared by all clones of
 that instance and is independent of other instances. Calling `notify(false)` removes its remote
 watch. Each instance keeps an `air_notifications::Subscription` that decides when to alert,
-watch, acknowledge, or remove a watch. This local state is recreated on restore and is not saved
-in the contract. The normal instance service executes those actions;
+watch, acknowledge, or remove a watch. The enabled flag is saved with the instance cache and
+restored on reopening; catch-up state starts fresh so replay stays quiet. The flag is local to
+the installation and is not saved in the contract. The normal instance service executes those actions;
 there is no separate application notification client or per-instance notification service.
+
+Instance caches use the `ramp2::air::InstanceState` namespace with the saved notification flag.
+The previous `ramp2::air::instances::InstanceState` caches are not read or migrated. Instances
+rebuild from their server history; unsent work in previous instance caches is not recovered.
 
 Only live incoming updates after catching up to the channel head produce local alerts. Historical
 replay and confirmation of the current user's own writes do not alert. In the foreground, Maverick

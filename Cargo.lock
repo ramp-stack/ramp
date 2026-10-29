@@ -61,7 +61,7 @@ dependencies = [
 
 [[package]]
 name = "air_notifications"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "air",
  "serde",
@@ -4147,7 +4147,7 @@ dependencies = [
 
 [[package]]
 name = "ramp2"
-version = "3.0.2"
+version = "3.0.3"
 dependencies = [
  "air",
  "air_notifications",
