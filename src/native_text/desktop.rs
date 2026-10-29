@@ -6,6 +6,6 @@ use super::Action;
 
 pub struct NativeText;
 impl NativeText {
-    pub fn new(_window: &Window, _sender: UnboundedSender<Action>) -> Self {Self}
-    pub fn update(&mut self, _instructions: &[Instruction]) {}
+    pub fn new(_window: &Window, _sender: UnboundedSender<Action>, _revision: u64) -> Self {Self}
+    pub fn update(&mut self, _instructions: &[Instruction], _revision: u64) {}
 }

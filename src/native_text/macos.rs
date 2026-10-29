@@ -6,13 +6,13 @@ use objc2_app_kit::{
     NSBackgroundColorAttributeName, NSClipView, NSColor, NSEvent, NSEventModifierFlags,
     NSFont, NSFontAttributeName, NSForegroundColorAttributeName, NSKernAttributeName,
     NSLineBreakMode, NSMutableParagraphStyle, NSParagraphStyleAttributeName, NSSelectionGranularity,
-    NSTextAlignment, NSTextDelegate, NSTextView, NSTextViewDelegate, NSView,
+    NSTextAlignment, NSTextDelegate, NSTextInputClient, NSTextView, NSTextViewDelegate, NSView,
 };
 use objc2_core_foundation::{CFData, CFRetained};
 use objc2_core_text::{CTFont, CTFontManagerCreateFontDescriptorFromData};
 use objc2_foundation::{
     NSDictionary, NSMutableAttributedString, NSNotification, NSNumber, NSObjectProtocol,
-    NSPoint, NSRange, NSRect, NSSize, NSString,
+    NSPoint, NSRange, NSRect, NSSize, NSString, NSUndoManager,
 };
 use prism::drawable::{Instruction, Item};
 use prism::drawable::text::{Align, Text};
@@ -22,25 +22,30 @@ use uuid::Uuid;
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use super::{Action, SetText};
 
 pub struct NativeText {
     parent: Retained<NSView>,
     sender: UnboundedSender<Action>,
+    sequence: Rc<Cell<u64>>,
     views: HashMap<Uuid, (Retained<NSClipView>, Retained<TextView>)>,
     fonts: HashMap<(usize, u32), Retained<NSFont>>,
 }
 impl NativeText {
-    pub fn new(window: &maverick_os::Window, sender: UnboundedSender<Action>) -> Self {
+    pub fn new(window: &maverick_os::Window, sender: UnboundedSender<Action>, revision: u64) -> Self {
         let RawWindowHandle::AppKit(handle) = window.window_handle().unwrap().as_raw()
             else {unreachable!()};
         MainThreadMarker::new().unwrap();
         let parent = unsafe {Retained::retain(handle.ns_view.as_ptr().cast::<NSView>()).unwrap()};
-        Self {parent, sender, views: HashMap::new(), fonts: HashMap::new()}
+        Self {
+            parent, sender, sequence: Rc::new(Cell::new(revision)),
+            views: HashMap::new(), fonts: HashMap::new(),
+        }
     }
 
-    pub fn update(&mut self, instructions: &[Instruction]) {
+    pub fn update(&mut self, instructions: &[Instruction], revision: u64) {
         let mtm = MainThreadMarker::new().unwrap();
         let mut seen = HashSet::new();
         let mut visible = HashSet::new();
@@ -59,7 +64,7 @@ impl NativeText {
             let right = right.min(instruction.offset.0 + width);
             let bottom = bottom.min(instruction.offset.1 + height);
             if right <= left || bottom <= top {
-                if let Some((_, view)) = self.views.get(&text.id) {
+                if let Some((_, view)) = self.views.get(&text.id) && view.ivars().revision.get() <= revision {
                     *view.ivars().text.borrow_mut() = Some(text.clone());
                 }
                 continue;
@@ -69,12 +74,33 @@ impl NativeText {
             let (clip, view) = self.views.entry(text.id).or_insert_with(|| {
                 let clip = NSClipView::initWithFrame(NSClipView::alloc(mtm), NSRect::ZERO);
                 clip.setDrawsBackground(false);
-                let view = TextView::new(&self.parent, self.sender.clone(), mtm);
+                let view = TextView::new(&self.parent, self.sender.clone(), self.sequence.clone(), mtm);
                 clip.setDocumentView(Some(&view));
                 self.parent.addSubview(&clip);
                 (clip, view)
             });
             view.ivars().updating.set(true);
+            let container = unsafe {view.textContainer().unwrap()};
+            container.setContainerSize(NSSize::new(width as f64, f64::MAX));
+            container.setMaximumNumberOfLines(text.max_lines.unwrap_or(0) as usize);
+            container.setLineBreakMode(if text.max_lines.is_some() {NSLineBreakMode::ByTruncatingTail}
+                else {NSLineBreakMode::ByWordWrapping});
+            view.setFrame(NSRect::new(NSPoint::ZERO, NSSize::new(width as f64, height as f64)));
+            let y = if self.parent.isFlipped() {top as f64}
+                else {self.parent.bounds().size.height - bottom as f64};
+            clip.setFrame(NSRect::new(
+                NSPoint::new(left as f64, y), NSSize::new((right - left) as f64, (bottom - top) as f64),
+            ));
+            clip.setBoundsOrigin(NSPoint::new(
+                (left - instruction.offset.0) as f64, (top - instruction.offset.1) as f64,
+            ));
+            let hidden = clip.isHidden();
+            clip.setHidden(false);
+
+            if view.ivars().revision.get() > revision {
+                view.ivars().updating.set(false);
+                continue;
+            }
             let previous = view.ivars().text.borrow();
             let string = text.spans.iter().map(|span| span.text.as_str()).collect::<String>();
             let preserve = view.string().to_string() == string;
@@ -87,6 +113,7 @@ impl NativeText {
                     NSMutableAttributedString::alloc(), &NSString::from_str(&string),
                 );
                 let mut location = 0;
+                let mut first = None;
                 for span in &text.spans {
                     let key = (span.font.file_hash(), span.font_size.to_bits());
                     let font = self.fonts.entry(key).or_insert_with(|| unsafe {
@@ -120,32 +147,34 @@ impl NativeText {
                         );
                         attributed.addAttribute_value_range(NSParagraphStyleAttributeName, &paragraph, range);
                     }
-                    if location == 0 {
-                        view.setFont(Some(font));
-                        view.setDefaultParagraphStyle(Some(&paragraph));
-                    }
+                    if first.is_none() {first = Some((font.clone(), paragraph));}
                     location += range.length;
                 }
-                unsafe {view.textStorage().unwrap().setAttributedString(&attributed);}
+                let native = unsafe {view.textStorage().unwrap()};
+                if let Some((font, paragraph)) = first && (!preserve || attributed.length() == 0) {
+                    view.setFont(Some(&font));
+                    view.setDefaultParagraphStyle(Some(&paragraph));
+                }
+                if preserve {
+                    native.beginEditing();
+                    let mut index = 0;
+                    while index < attributed.length() {
+                        let mut range = NSRange::new(0, 0);
+                        unsafe {
+                            let attributes = attributed.attributesAtIndex_effectiveRange(index, &mut range);
+                            native.addAttributes_range(&attributes, range);
+                        }
+                        index = range.location + range.length;
+                    }
+                    native.endEditing();
+                } else {
+                    if view.hasMarkedText() {view.unmarkText();}
+                    native.setAttributedString(&attributed);
+                    view.breakUndoCoalescing();
+                    view.ivars().undo.removeAllActions();
+                }
             }
             view.setEditable(text.cursor.is_some());
-            let container = unsafe {view.textContainer().unwrap()};
-            container.setContainerSize(NSSize::new(width as f64, f64::MAX));
-            container.setMaximumNumberOfLines(text.max_lines.unwrap_or(0) as usize);
-            container.setLineBreakMode(if text.max_lines.is_some() {NSLineBreakMode::ByTruncatingTail}
-                else {NSLineBreakMode::ByWordWrapping});
-            view.setFrame(NSRect::new(NSPoint::ZERO, NSSize::new(width as f64, height as f64)));
-            let y = if self.parent.isFlipped() {top as f64}
-                else {self.parent.bounds().size.height - bottom as f64};
-            clip.setFrame(NSRect::new(
-                NSPoint::new(left as f64, y), NSSize::new((right - left) as f64, (bottom - top) as f64),
-            ));
-            clip.setBoundsOrigin(NSPoint::new(
-                (left - instruction.offset.0) as f64, (top - instruction.offset.1) as f64,
-            ));
-            let hidden = clip.isHidden();
-            clip.setHidden(false);
-
             if text.focused && (hidden || previous.as_ref().is_none_or(|old| !old.focused)) {
                 view.window().unwrap().makeFirstResponder(Some(view));
             } else if !text.focused && previous.as_ref().is_some_and(|old| old.focused)
@@ -153,12 +182,12 @@ impl NativeText {
             {
                 view.window().unwrap().makeFirstResponder(Some(&self.parent));
             }
-            if let Some(cursor) = text.cursor {
+            if let Some(cursor) = text.cursor && !view.hasMarkedText() {
                 let anchor = TextView::utf16_offset(&string, text.anchor.unwrap_or(cursor));
                 let cursor = TextView::utf16_offset(&string, cursor);
                 let range = NSRange::new(cursor.min(anchor), cursor.abs_diff(anchor));
                 if view.selectedRange() != range {view.setSelectedRange(range);}
-            } else if preserve && view.selectedRange() != selected {
+            } else if text.cursor.is_none() && preserve && view.selectedRange() != selected {
                 view.setSelectedRange(selected);
             }
             drop(previous);
@@ -194,6 +223,9 @@ struct TextState {
     parent: Retained<NSView>,
     sender: RefCell<Option<UnboundedSender<Action>>>,
     text: RefCell<Option<Text>>,
+    undo: Retained<NSUndoManager>,
+    sequence: Rc<Cell<u64>>,
+    revision: Cell<u64>,
     updating: Cell<bool>,
     anchor: Cell<NSRange>,
 }
@@ -210,30 +242,39 @@ define_class!(
             if self.ivars().updating.get() || !self.isEditable() {return}
             let id = self.ivars().text.borrow().as_ref().unwrap().id;
             let text = self.string().to_string();
-            let range = self.selectedRange();
-            let cursor = Self::byte_offset(&text, range.location + range.length);
-            self.send(Action::SetText(SetText {id, text, cursor: Some(cursor)}));
-            self.selection();
+            let selected = self.selectedRange();
+            let range = Self::byte_offset(&text, selected.location)
+                ..Self::byte_offset(&text, selected.location + selected.length);
+            self.send(Action::SetText {edit: SetText {id, text, range}, revision: self.revision()});
         }
     }
     unsafe impl NSTextViewDelegate for TextView {
         #[unsafe(method(textViewDidChangeSelection:))]
         fn text_view_did_change_selection(&self, _notification: &NSNotification) {self.selection();}
+
+        #[unsafe(method_id(undoManagerForTextView:))]
+        fn undo_manager_for_text_view(&self, _view: &NSTextView) -> Option<Retained<NSUndoManager>> {
+            Some(self.ivars().undo.clone())
+        }
     }
     impl TextView {
         #[unsafe(method(keyDown:))]
         fn key_down(&self, event: &NSEvent) {
-            if !self.clipboard(event) {self.ivars().parent.keyDown(event);}
+            if self.editing_shortcut(event) {return}
+            if self.forward_key(event) {self.ivars().parent.keyDown(event);}
+            else {unsafe {let _: () = msg_send![super(self), keyDown: event];}}
         }
 
         #[unsafe(method(keyUp:))]
-        fn key_up(&self, event: &NSEvent) {self.ivars().parent.keyUp(event);}
+        fn key_up(&self, event: &NSEvent) {
+            if self.forward_key(event) {self.ivars().parent.keyUp(event);}
+        }
 
         #[unsafe(method(flagsChanged:))]
         fn flags_changed(&self, event: &NSEvent) {self.ivars().parent.flagsChanged(event);}
 
         #[unsafe(method(performKeyEquivalent:))]
-        fn perform_key_equivalent(&self, event: &NSEvent) -> bool {self.clipboard(event)}
+        fn perform_key_equivalent(&self, event: &NSEvent) -> bool {self.editing_shortcut(event)}
 
         #[unsafe(method(mouseDown:))]
         fn mouse_down(&self, event: &NSEvent) {
@@ -280,10 +321,11 @@ define_class!(
     }
 );
 impl TextView {
-    fn new(parent: &NSView, sender: UnboundedSender<Action>, mtm: MainThreadMarker) -> Retained<Self> {
+    fn new(parent: &NSView, sender: UnboundedSender<Action>, sequence: Rc<Cell<u64>>, mtm: MainThreadMarker) -> Retained<Self> {
         let view = Self::alloc(mtm).set_ivars(TextState {
             parent: parent.retain(), sender: RefCell::new(Some(sender)),
-            text: RefCell::new(None), updating: Cell::new(true), anchor: Cell::new(NSRange::new(0, 0)),
+            text: RefCell::new(None), undo: NSUndoManager::new(mtm), sequence, revision: Cell::new(0),
+            updating: Cell::new(true), anchor: Cell::new(NSRange::new(0, 0)),
         });
         let view: Retained<Self> = unsafe {msg_send![super(view), initWithFrame: NSRect::ZERO]};
         view.setDelegate(Some(ProtocolObject::from_ref(&*view)));
@@ -293,7 +335,9 @@ impl TextView {
         view.setRichText(false);
         view.setImportsGraphics(false);
         view.setSelectable(true);
-        view.setAllowsUndo(false);
+        view.setAllowsUndo(true);
+        view.setContinuousSpellCheckingEnabled(true);
+        view.setAutomaticSpellingCorrectionEnabled(true);
         view.setUsesFontPanel(false);
         view.setUsesRuler(false);
         view.setHorizontallyResizable(false);
@@ -318,6 +362,13 @@ impl TextView {
         if let Some(sender) = &*self.ivars().sender.borrow() {let _ = sender.unbounded_send(action);}
     }
 
+    fn revision(&self) -> u64 {
+        let revision = self.ivars().sequence.get() + 1;
+        self.ivars().sequence.set(revision);
+        self.ivars().revision.set(revision);
+        revision
+    }
+
     fn selection(&self) {
         if self.ivars().updating.get() || !self.isEditable() {return}
         let id = self.ivars().text.borrow().as_ref().unwrap().id;
@@ -325,7 +376,7 @@ impl TextView {
         let selected = self.selectedRange();
         let range = Self::byte_offset(&text, selected.location)
             ..Self::byte_offset(&text, selected.location + selected.length);
-        self.send(Action::Selection {id, text, range});
+        self.send(Action::Selection {id, text, range, revision: self.revision()});
     }
 
     fn mouse(&self, event: &NSEvent, state: MouseState) {
@@ -341,7 +392,13 @@ impl TextView {
         self.selectionRangeForProposedRange_granularity(NSRange::new(index, 0), self.selectionGranularity())
     }
 
-    fn clipboard(&self, event: &NSEvent) -> bool {
+    fn forward_key(&self, event: &NSEvent) -> bool {
+        !self.isEditable()
+            || event.modifierFlags().intersects(NSEventModifierFlags::Command | NSEventModifierFlags::Control)
+            || !self.hasMarkedText() && matches!(event.keyCode(), 36 | 48 | 53 | 76)
+    }
+
+    fn editing_shortcut(&self, event: &NSEvent) -> bool {
         if !self.is_first_responder() || !event.modifierFlags().contains(NSEventModifierFlags::Command) {
             return false;
         }
@@ -351,6 +408,11 @@ impl TextView {
                 Some("c") => self.copy(None), Some("a") => self.selectAll(None),
                 Some("x") if self.isEditable() => self.cut(None),
                 Some("v") if self.isEditable() => self.pasteAsPlainText(None),
+                Some("z" | "Z") if self.isEditable() => {
+                    let undo = &self.ivars().undo;
+                    if event.modifierFlags().contains(NSEventModifierFlags::Shift) {undo.redo();}
+                    else {undo.undo();}
+                }
                 _ => return false,
             }
         }
@@ -379,6 +441,7 @@ impl TextView {
     fn detach(&self) {
         self.ivars().updating.set(true);
         self.ivars().sender.borrow_mut().take();
+        self.ivars().undo.removeAllActions();
         self.setDelegate(None);
         if self.is_first_responder() {
             self.window().unwrap().makeFirstResponder(Some(&self.ivars().parent));

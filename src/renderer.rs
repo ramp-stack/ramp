@@ -8,10 +8,12 @@ use crate::native_text::{Action, NativeText};
 pub struct Frame {
     instructions: Vec<Instruction>,
     sender: UnboundedSender<Action>,
+    /// Latest native edit consumed before these drawing instructions were produced.
+    revision: u64,
 }
 impl Frame {
-    pub(crate) fn new(instructions: Vec<Instruction>, sender: UnboundedSender<Action>) -> Self {
-        Self {instructions, sender}
+    pub(crate) fn new(instructions: Vec<Instruction>, sender: UnboundedSender<Action>, revision: u64) -> Self {
+        Self {instructions, sender, revision}
     }
 }
 
@@ -37,8 +39,8 @@ impl maverick_os::Renderer for Renderer {
     fn update(&mut self, frame: Frame) -> bool {
         let size = self.window.physical();
         if size.width == 0 || size.height == 0 {return false}
-        self.native_text.get_or_insert_with(|| NativeText::new(&self.window, frame.sender))
-            .update(&frame.instructions);
+        self.native_text.get_or_insert_with(|| NativeText::new(&self.window, frame.sender, frame.revision))
+            .update(&frame.instructions, frame.revision);
         self.renderer.update(frame.instructions, size.scale_factor as f32)
     }
     fn draw(&mut self) -> bool {

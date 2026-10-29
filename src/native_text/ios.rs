@@ -28,6 +28,7 @@ use uuid::Uuid;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
+use std::rc::Rc;
 
 use super::{Action, SetText};
 
@@ -36,18 +37,22 @@ pub struct NativeText {
     views: HashMap<Uuid, Retained<TextView>>,
     fonts: HashMap<usize, CFRetained<CGFont>>,
     sender: UnboundedSender<Action>,
+    sequence: Rc<Cell<u64>>,
 }
 impl NativeText {
-    pub fn new(window: &Window, sender: UnboundedSender<Action>) -> Self {
+    pub fn new(window: &Window, sender: UnboundedSender<Action>, revision: u64) -> Self {
         MainThreadMarker::new().unwrap();
         let RawWindowHandle::UiKit(handle) = window.window_handle().unwrap().as_raw() else {
             unreachable!()
         };
         let parent = unsafe {handle.ui_view.cast::<UIView>().as_ref()}.retain();
-        Self {parent, views: HashMap::new(), fonts: HashMap::new(), sender}
+        Self {
+            parent, views: HashMap::new(), fonts: HashMap::new(), sender,
+            sequence: Rc::new(Cell::new(revision)),
+        }
     }
 
-    pub fn update(&mut self, instructions: &[Instruction]) {
+    pub fn update(&mut self, instructions: &[Instruction], revision: u64) {
         let mut seen = HashSet::new();
         let focused = instructions.iter().find_map(|instruction| match &instruction.item {
             Item::Text(text) if text.focused => Some(text.id),
@@ -57,7 +62,7 @@ impl NativeText {
             let Item::Text(text) = &instruction.item else {continue};
             if !seen.insert(text.id) {continue}
             let view = self.views.entry(text.id).or_insert_with(|| {
-                TextView::new(&self.parent, text, self.sender.clone())
+                TextView::new(&self.parent, text, self.sender.clone(), self.sequence.clone())
             });
             view.ivars().applying.set(true);
             let container = view.superview().unwrap().downcast::<ContainerView>().unwrap();
@@ -98,7 +103,7 @@ impl NativeText {
                 ),
                 CGSize::new(text_width as f64, text_height as f64),
             ));
-            view.synchronize(text, &mut self.fonts);
+            view.synchronize(text, &mut self.fonts, revision);
         }
         self.views.retain(|id, view| {
             if seen.contains(id) {return true}
@@ -160,6 +165,8 @@ impl SelectionRect {
 
 struct TextState {
     id: Uuid,
+    sequence: Rc<Cell<u64>>,
+    revision: Cell<u64>,
     snapshot: RefCell<Option<Text>>,
     selection_width: Cell<f64>,
     sender: UnboundedSender<Action>,
@@ -188,9 +195,7 @@ define_class!(
     }
     unsafe impl UITextViewDelegate for TextView {
         #[unsafe(method(textViewDidChange:))]
-        fn changed(&self, _view: &UITextView) {
-            if self.ready() && self.markedTextRange().is_none() {self.send_text();}
-        }
+        fn changed(&self, _view: &UITextView) {self.send_text();}
 
         #[unsafe(method(textViewDidChangeSelection:))]
         fn selection_changed(&self, _view: &UITextView) {
@@ -255,10 +260,10 @@ define_class!(
         }
 
         #[unsafe(method(autocorrectionType))]
-        fn autocorrection_type(&self) -> UITextAutocorrectionType {UITextAutocorrectionType::No}
+        fn autocorrection_type(&self) -> UITextAutocorrectionType {UITextAutocorrectionType::Yes}
 
         #[unsafe(method(spellCheckingType))]
-        fn spell_checking_type(&self) -> UITextSpellCheckingType {UITextSpellCheckingType::No}
+        fn spell_checking_type(&self) -> UITextSpellCheckingType {UITextSpellCheckingType::Yes}
 
         #[unsafe(method(insertText:))]
         fn insert(&self, text: &NSString) {
@@ -267,15 +272,19 @@ define_class!(
                 return
             }
             let composing = self.ivars().composing.get() || self.markedTextRange().is_some();
-            if !composing {self.send_selection();}
+            let command = match text.to_string().as_str() {
+                "\n" | "\r" | "\r\n" => Some(Key::Enter), "\t" => Some(Key::Tab), _ => None,
+            };
+            if !composing && let Some(command) = command {
+                self.send_selection();
+                self.send_key(command);
+                return
+            }
             self.ivars().applying.set(true);
             let _: () = unsafe {msg_send![super(self), insertText: text]};
             self.ivars().applying.set(false);
-            if self.markedTextRange().is_some() {return}
-            if composing {
-                self.ivars().composing.set(false);
-                self.send_text();
-            } else {self.send_keys(&text.to_string());}
+            self.ivars().composing.set(self.markedTextRange().is_some());
+            self.send_text();
         }
 
         #[unsafe(method(deleteBackward))]
@@ -284,17 +293,11 @@ define_class!(
                 let _: () = unsafe {msg_send![super(self), deleteBackward]};
                 return
             }
-            let composing = self.ivars().composing.get() || self.markedTextRange().is_some();
-            if !composing {self.send_selection();}
             self.ivars().applying.set(true);
             let _: () = unsafe {msg_send![super(self), deleteBackward]};
             self.ivars().applying.set(false);
-            if composing {
-                if self.markedTextRange().is_none() {
-                    self.ivars().composing.set(false);
-                    self.send_text();
-                }
-            } else {self.send_key(Key::Backspace);}
+            self.ivars().composing.set(self.markedTextRange().is_some());
+            self.send_text();
         }
 
         #[unsafe(method(setMarkedText:selectedRange:))]
@@ -303,6 +306,7 @@ define_class!(
             let applying = self.ivars().applying.replace(true);
             let _: () = unsafe {msg_send![super(self), setMarkedText: text, selectedRange: range]};
             self.ivars().applying.set(applying);
+            self.send_text();
         }
 
         #[unsafe(method(unmarkText))]
@@ -378,14 +382,15 @@ define_class!(
 );
 
 impl TextView {
-    fn new(parent: &UIView, text: &Text, sender: UnboundedSender<Action>) -> Retained<Self> {
+    fn new(parent: &UIView, text: &Text, sender: UnboundedSender<Action>, sequence: Rc<Cell<u64>>) -> Retained<Self> {
         let mtm = MainThreadMarker::new().unwrap();
         let container = ContainerView::new(mtm);
         container.setClipsToBounds(true);
         container.setOpaque(false);
         parent.addSubview(&container);
         let view = Self::alloc(mtm).set_ivars(TextState {
-            id: text.id, snapshot: RefCell::new(None), selection_width: Cell::new(0.0), sender,
+            id: text.id, sequence, revision: Cell::new(0), snapshot: RefCell::new(None),
+            selection_width: Cell::new(0.0), sender,
             active: Cell::new(true), applying: Cell::new(false), composing: Cell::new(false),
             native_action: Cell::new(false), touch: Cell::new(None),
         });
@@ -432,8 +437,13 @@ impl TextView {
         view
     }
 
-    fn synchronize(&self, text: &Text, fonts: &mut HashMap<usize, CFRetained<CGFont>>) {
+    fn synchronize(&self, text: &Text, fonts: &mut HashMap<usize, CFRetained<CGFont>>, revision: u64) {
         self.ivars().applying.set(true);
+        if self.ivars().revision.get() > revision {
+            self.setContentOffset(CGPoint::ZERO);
+            self.ivars().applying.set(false);
+            return
+        }
         // Editable mirrors still reconcile native edits that the app may have rejected.
         if text.cursor.is_none() && self.ivars().snapshot.borrow().as_ref().is_some_and(|previous| {
             previous == text && previous.focused == text.focused && previous.anchor == text.anchor
@@ -445,19 +455,26 @@ impl TextView {
         let was_focused = self.ivars().snapshot.borrow().as_ref().is_some_and(|text| text.focused);
         self.setEditable(text.cursor.is_some());
         self.textContainer().setMaximumNumberOfLines(text.max_lines.unwrap_or(0) as usize);
-        if self.markedTextRange().is_none() {
+        {
             let value: String = text.spans.iter().map(|span| span.text.as_str()).collect();
             let current = self.text().to_string();
             let previous = self.ivars().snapshot.borrow();
             let attributes_changed = previous.as_ref().is_none_or(|previous| {
                 previous.spans != text.spans || previous.align != text.align
             });
-            let selection = self.selection();
+            let style_changed = previous.as_ref().is_none_or(|previous| {
+                previous.align != text.align || previous.spans.len() != text.spans.len()
+                    || previous.spans.iter().zip(&text.spans).any(|(old, new)| {
+                        old.font != new.font || old.font_size != new.font_size
+                            || old.line_height != new.line_height || old.kerning != new.kerning
+                    })
+            });
             if current != value || attributes_changed {
                 let attributed = NSMutableAttributedString::initWithString(
                     NSMutableAttributedString::alloc(), &NSString::from_str(&value),
                 );
                 let mut start = 0;
+                let mut first_font = None;
                 for span in &text.spans {
                     let font = fonts.entry(span.font.file_hash()).or_insert_with(|| {
                         let data = CFData::from_bytes(span.font.bytes());
@@ -492,14 +509,51 @@ impl TextView {
                             NSKernAttributeName, &NSNumber::new_f32(span.kerning), range,
                         );
                     }
-                    if start == 0 {self.setFont(Some(font));}
+                    if first_font.is_none() {first_font = Some(font.retain());}
                     start += range.length;
                 }
-                self.setAttributedText(Some(&attributed));
-                self.setTextColor(Some(&UIColor::clearColor()));
-                if current == value {self.select(selection);}
+                if current != value {
+                    if self.markedTextRange().is_some() {self.unmarkText();}
+                    self.setFont(first_font.as_deref());
+                    self.setAttributedText(Some(&attributed));
+                    self.setTextColor(Some(&UIColor::clearColor()));
+                    if let Some(undo) = self.undoManager() {undo.removeAllActions();}
+                } else if attributed.length() == 0 && style_changed {
+                    self.setFont(first_font.as_deref());
+                } else {
+                    let native = self.textStorage();
+                    for key in unsafe {[
+                        NSFontAttributeName, NSForegroundColorAttributeName,
+                        NSParagraphStyleAttributeName, NSKernAttributeName,
+                    ]} {
+                        let mut index = 0;
+                        while index < attributed.length() {
+                            let mut actual_range = NSRange::new(0, 0);
+                            let mut desired_range = NSRange::new(0, 0);
+                            let actual = unsafe {
+                                native.attribute_atIndex_effectiveRange(key, index, &mut actual_range)
+                            };
+                            let desired = unsafe {
+                                attributed.attribute_atIndex_effectiveRange(key, index, &mut desired_range)
+                            }.unwrap();
+                            let end = (actual_range.location + actual_range.length)
+                                .min(desired_range.location + desired_range.length);
+                            let equal = actual.is_some_and(|actual| unsafe {
+                                msg_send![&*actual, isEqual: &*desired]
+                            });
+                            if !equal {
+                                unsafe {
+                                    native.addAttribute_value_range(
+                                        key, &desired, NSRange::new(index, end - index),
+                                    );
+                                }
+                            }
+                            index = end;
+                        }
+                    }
+                }
             }
-            if let Some(cursor) = text.cursor {
+            if self.markedTextRange().is_none() && let Some(cursor) = text.cursor {
                 let anchor = Self::utf16(&value, text.anchor.unwrap_or(cursor));
                 let cursor = Self::utf16(&value, cursor);
                 let desired = NSRange::new(cursor.min(anchor), cursor.abs_diff(anchor));
@@ -553,10 +607,11 @@ impl TextView {
         if !self.ready() || !self.isEditable() {return}
         let text = self.text().to_string();
         let selection = self.selection();
-        let cursor = Some(Self::utf8(&text, selection.location + selection.length));
-        let _ = self.ivars().sender.unbounded_send(Action::SetText(SetText {
-            id: self.ivars().id, text, cursor,
-        }));
+        let range = Self::utf8(&text, selection.location)
+            ..Self::utf8(&text, selection.location + selection.length);
+        let _ = self.ivars().sender.unbounded_send(Action::SetText {
+            edit: SetText {id: self.ivars().id, text, range}, revision: self.next_revision(),
+        });
     }
 
     fn send_selection(&self) {
@@ -567,22 +622,16 @@ impl TextView {
             start: Self::utf8(&text, selection.location),
             end: Self::utf8(&text, selection.location + selection.length),
         };
-        let _ = self.ivars().sender.unbounded_send(Action::Selection {id: self.ivars().id, text, range});
+        let _ = self.ivars().sender.unbounded_send(Action::Selection {
+            id: self.ivars().id, text, range, revision: self.next_revision(),
+        });
     }
 
-    fn send_keys(&self, text: &str) {
-        let mut characters = text.chars().peekable();
-        while let Some(character) = characters.next() {
-            self.send_key(match character {
-                '\r' => {
-                    if characters.peek() == Some(&'\n') {characters.next();}
-                    Key::Enter
-                }
-                '\n' => Key::Enter,
-                '\t' => Key::Tab,
-                _ => Key::Character(character.to_string()),
-            });
-        }
+    fn next_revision(&self) -> u64 {
+        let revision = self.ivars().sequence.get() + 1;
+        self.ivars().sequence.set(revision);
+        self.ivars().revision.set(revision);
+        revision
     }
 
     fn selection(&self) -> NSRange {

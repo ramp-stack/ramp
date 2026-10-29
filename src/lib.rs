@@ -22,6 +22,7 @@ pub struct Ramp<A: prism::Application> {
     prism: prism::Prism,
     sender: UnboundedSender<Action>,
     receiver: UnboundedReceiver<Action>,
+    revision: u64,
     application: std::marker::PhantomData<A>,
 }
 impl<A: prism::Application> maverick_os::Application for Ramp<A> {
@@ -50,7 +51,7 @@ impl<A: prism::Application> maverick_os::Application for Ramp<A> {
         let air = prism::air::Air::new(air::Air::new(secret, &hardware));
         let prism = prism::Prism::new::<A, _>(hardware::Hardware(hardware), air, window);
         let (sender, receiver) = mpsc::unbounded();
-        Self {prism, sender, receiver, application: std::marker::PhantomData}
+        Self {prism, sender, receiver, revision: 0, application: std::marker::PhantomData}
     }
 
     fn on_input(&mut self, input: native::Input) {
@@ -142,7 +143,10 @@ impl<A: prism::Application> maverick_os::Application for Ramp<A> {
         }
     }
 
-    fn draw(&mut self) -> Frame {Frame::new(self.prism.draw(), self.sender.clone())}
+    fn draw(&mut self) -> Frame {
+        self.drain_native();
+        Frame::new(self.prism.draw(), self.sender.clone(), self.revision)
+    }
     async fn changed(&mut self) {
         futures::select_biased! {
             action = self.receiver.next().fuse() => self.action(action.unwrap()),
@@ -159,10 +163,16 @@ impl<A: prism::Application> Ramp<A> {
 
     fn action(&mut self, action: Action) {
         match action {
-            Action::SetText(edit) => self.prism.on_event(edit),
-            Action::Selection {id, text, range} => {
+            Action::SetText {edit, revision} => {
+                assert!(edit.text.is_char_boundary(edit.range.start)
+                    && edit.text.is_char_boundary(edit.range.end));
+                self.prism.on_event(edit);
+                self.revision = self.revision.max(revision);
+            }
+            Action::Selection {id, text, range, revision} => {
                 assert!(text.is_char_boundary(range.start) && text.is_char_boundary(range.end));
                 self.prism.on_event(Selection {id, text, range});
+                self.revision = self.revision.max(revision);
             }
             Action::Keyboard(event) => self.prism.on_event(event),
             Action::Mouse(event) => self.prism.on_event(event),

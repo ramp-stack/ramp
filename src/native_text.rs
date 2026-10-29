@@ -1,5 +1,5 @@
 //! Native text mirrors follow Prism's drawing snapshots. Native callbacks queue owned actions;
-//! Prism remains the text owner and renders the glyphs. Selection and clipboard UI are native.
+//! Prism remains the text owner and renders the glyphs. Editing and selection UI are native.
 
 use prism::Context;
 use prism::drawable::Text;
@@ -26,8 +26,8 @@ mod desktop;
 pub use desktop::NativeText;
 
 pub enum Action {
-    SetText(SetText),
-    Selection {id: Uuid, text: String, range: Range<usize>},
+    SetText {edit: SetText, revision: u64},
+    Selection {id: Uuid, text: String, range: Range<usize>, revision: u64},
     Keyboard(KeyboardEvent),
     Mouse(MouseEvent),
 }
@@ -36,8 +36,8 @@ pub enum Action {
 pub struct SetText {
     pub id: Uuid,
     pub text: String,
-    /// UTF-8 byte offset, converted by the native adapter before queuing the event.
-    pub cursor: Option<usize>,
+    /// UTF-8 byte offsets, converted by the native adapter before queuing the event.
+    pub range: Range<usize>,
 }
 impl Event for SetText {
     fn pass(&self, _ctx: &mut Context, children: &mut [ChildEvent<'_, Self>]) {
@@ -61,12 +61,29 @@ impl Event for Selection {
 impl OnEvent<SetText> for Text {
     fn on(&mut self, _ctx: &mut Context, event: SetText) -> Vec<Box<dyn DynEvent>> {
         if self.id != event.id {return vec![Box::new(event)]}
-        if !self.spans.iter().flat_map(|span| span.text.chars()).eq(event.text.chars()) {
-            self.spans.truncate(1);
-            self.spans.first_mut().unwrap().text = event.text;
+        let value: String = self.spans.iter().map(|span| span.text.as_str()).collect();
+        if value != event.text {
+            let start: usize = value.chars().zip(event.text.chars())
+                .take_while(|(old, new)| old == new).map(|(c, _)| c.len_utf8()).sum();
+            let suffix: usize = value[start..].chars().rev().zip(event.text[start..].chars().rev())
+                .take_while(|(old, new)| old == new).map(|(c, _)| c.len_utf8()).sum();
+            let range = start..value.len() - suffix;
+            let mut offset = 0;
+            for span in &mut self.spans {
+                let end = offset + span.text.len();
+                let from = range.start.max(offset);
+                let to = range.end.min(end);
+                if from < to {span.text.replace_range(from - offset..to - offset, "");}
+                offset = end;
+            }
+            let mut offset = start;
+            let span = self.spans.iter_mut().find(|span| {
+                if offset <= span.text.len() {true} else {offset -= span.text.len(); false}
+            }).unwrap();
+            span.text.insert_str(offset, &event.text[start..event.text.len() - suffix]);
         }
-        self.cursor = event.cursor;
-        self.anchor = None;
+        self.cursor = Some(event.range.end);
+        self.anchor = (event.range.start != event.range.end).then_some(event.range.start);
         vec![]
     }
 }
