@@ -6,6 +6,7 @@
 - This is the canonical coding guide and supersedes older AGENT.rs copies.
 - Record user-provided coding advice as general rules for future work. Keep project-specific requirements in project documentation and write rules without author prefixes.
 - Deploying a crate means bumping its version, pushing the release to GitHub, and publishing it with Cargo.
+- Honor standing authorization to push directly to the default branch of user-owned repositories; do not add a pull-request step unless requested.
 - Consolidate duplicate guidance. Ask about conflicting instructions rather than silently choosing.
 
 ## Structure and design
